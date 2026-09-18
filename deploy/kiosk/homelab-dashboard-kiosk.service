@@ -1,0 +1,17 @@
+[Unit]
+Description=Homelab Dashboard kiosk (cage + chromium, no desktop environment required)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Environment=DASHBOARD_URL=http://localhost:8080
+# `cage` is a minimal Wayland kiosk compositor -- lighter than a full
+# desktop environment on a Pi. Install with: sudo apt-get install cage
+ExecStart=/usr/bin/cage -- /usr/bin/chromium-browser --kiosk --noerrdialogs --disable-infobars --app=${DASHBOARD_URL}
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=graphical.target

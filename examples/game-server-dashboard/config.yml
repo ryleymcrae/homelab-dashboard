@@ -1,0 +1,49 @@
+# Example: a homelab that happens to run several game servers, shown to
+# demonstrate that games are ordinary services (grouped under "Games"),
+# not a special first-class concept anywhere in the product.
+dashboard:
+  title: "Ziri Homelab"
+  tagline: "Small Servers. Big Adventures."
+
+hosts:
+  - name: ziri-mini
+    model: "Lenovo M720q"
+    is_local: true
+    icon: server
+
+services:
+  # A game server exposed as a plain TCP check -- works for anything
+  # that doesn't have a richer status API.
+  - name: Terraria
+    type: tcp
+    host_address: 127.0.0.1
+    port: 7777
+    icon: tree
+    group: Games
+
+  # A game server with a JSON status endpoint, using the bundled example
+  # plugin to surface players/world-day/version -- see docs/plugins.md.
+  - name: Dragonwilds
+    type: custom
+    plugin: example-game-server
+    plugin_options:
+      status_url: http://127.0.0.1:8211/status
+    icon: flame
+    group: Games
+
+  - name: Enshrouded
+    type: tcp
+    host_address: 127.0.0.1
+    port: 15637
+    icon: mountain
+    group: Games
+
+  # Non-game infrastructure alongside the game servers, on equal footing.
+  - name: SSH
+    type: tcp
+    host_address: 127.0.0.1
+    port: 22
+    icon: terminal
+    group: Infrastructure
+
+demo_mode: false

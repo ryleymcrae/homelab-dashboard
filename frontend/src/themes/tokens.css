@@ -1,0 +1,132 @@
+/*
+  Design tokens.
+
+  Values here are read directly off the supplied reference image:
+  dark navy/charcoal background, slightly lighter card surfaces, thin
+  blue-gray borders, blue primary accent, green/orange/red status colors,
+  compact spacing, modest corner radii. A light theme is provided as a
+  second, equally complete token set -- never a naive inversion.
+
+  Components must ONLY reference these variables, never hard-coded colors,
+  so a community theme is a matter of adding a new `[data-theme="..."]`
+  block here.
+*/
+
+:root,
+[data-theme="dark"] {
+  /* Surfaces */
+  --color-bg: #0f1621;
+  --color-bg-elevated: #131b28;
+  --color-surface: #182231;
+  --color-surface-2: #1e2a3c;
+  --color-border: #29374a;
+  --color-border-strong: #37495f;
+
+  /* Text */
+  --color-text: #eef2f7;
+  --color-text-muted: #8ea0b5;
+  --color-text-faint: #5c7086;
+
+  /* Accent */
+  --color-primary: #3b82f6;
+  --color-primary-strong: #2563eb;
+  --color-primary-soft: rgba(59, 130, 246, 0.16);
+
+  /* Status */
+  --color-success: #34d399;
+  --color-success-soft: rgba(52, 211, 153, 0.16);
+  --color-warning: #f59e0b;
+  --color-warning-soft: rgba(245, 158, 11, 0.16);
+  --color-danger: #ef4444;
+  --color-danger-soft: rgba(239, 68, 68, 0.16);
+  --color-unknown: #6b7a8d;
+  --color-unknown-soft: rgba(107, 122, 141, 0.16);
+
+  /* Charts */
+  --chart-line-1: #3b82f6;
+  --chart-line-2: #34d399;
+  --chart-grid: #223047;
+
+  /* Shape */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  /* Spacing (compact, information-dense) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  /* Typography */
+  --font-sans: -apple-system, "Segoe UI", Roboto, Inter, Helvetica, Arial, sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+
+  --text-xs: 11px;
+  --text-sm: 12.5px;
+  --text-base: 14px;
+  --text-md: 16px;
+  --text-lg: 20px;
+  --text-xl: 26px;
+
+  /* Elevation */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-modal: 0 12px 32px rgba(0, 0, 0, 0.5);
+
+  /* Touch */
+  --touch-target: 40px;
+}
+
+[data-theme="light"] {
+  --color-bg: #eef1f5;
+  --color-bg-elevated: #f7f9fb;
+  --color-surface: #ffffff;
+  --color-surface-2: #f1f4f8;
+  --color-border: #d7dee6;
+  --color-border-strong: #c1ccd8;
+
+  --color-text: #101826;
+  --color-text-muted: #52657a;
+  --color-text-faint: #8698ab;
+
+  --color-primary: #2563eb;
+  --color-primary-strong: #1d4ed8;
+  --color-primary-soft: rgba(37, 99, 235, 0.1);
+
+  --color-success: #16a34a;
+  --color-success-soft: rgba(22, 163, 74, 0.12);
+  --color-warning: #d97706;
+  --color-warning-soft: rgba(217, 119, 6, 0.12);
+  --color-danger: #dc2626;
+  --color-danger-soft: rgba(220, 38, 38, 0.12);
+  --color-unknown: #7c8ba0;
+  --color-unknown-soft: rgba(124, 139, 160, 0.12);
+
+  --chart-line-1: #2563eb;
+  --chart-line-2: #16a34a;
+  --chart-grid: #e2e8f0;
+
+  --shadow-card: 0 1px 2px rgba(16, 24, 38, 0.08);
+  --shadow-modal: 0 12px 32px rgba(16, 24, 38, 0.22);
+}
+
+/*
+  Density is additive on top of the token set above, not a restructuring
+  of it: components only ever reference --space-*/--text-base, so
+  scaling those two custom properties up is enough to loosen the whole
+  UI for "comfortable" without touching a single component. "compact"
+  (the default, and the only density this app had before) needs no
+  block of its own -- it's just the base values above.
+*/
+[data-density="comfortable"] {
+  --space-1: 6px;
+  --space-2: 10px;
+  --space-3: 16px;
+  --space-4: 22px;
+  --space-5: 28px;
+  --space-6: 32px;
+  --text-base: 15px;
+}
+

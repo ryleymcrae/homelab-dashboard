@@ -1,0 +1,36 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: deploy/backend.Dockerfile
+    container_name: homelab-dashboard-backend
+    restart: unless-stopped
+    volumes:
+      - ./config.yml:/config/config.yml:ro
+      - dashboard-data:/data
+      # Required only if you monitor Docker containers (spec section 20).
+      # Read the implications in docs/security.md before enabling.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - DASHBOARD_CONFIG=/config/config.yml
+      # Uncomment to require a password for every client except those
+      # listed under auth.trusted_ips in config.yml (e.g. a kiosk). Unset
+      # (the default) means no login is required at all -- see
+      # docs/security.md.
+      # - DASHBOARD_PASSWORD=change-me
+    expose:
+      - "8080"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: deploy/frontend.Dockerfile
+    container_name: homelab-dashboard-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+
+volumes:
+  dashboard-data:

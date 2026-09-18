@@ -1,0 +1,35 @@
+# Example: a Raspberry Pi acting as both the dashboard host and a
+# monitored device (e.g. a sensor hub), viewed on its own attached
+# touchscreen via kiosk mode.
+dashboard:
+  title: "Pi Homelab"
+  tagline: "Small Servers. Big Adventures."
+
+hosts:
+  - name: raspberry-pi
+    model: "Raspberry Pi 4 Model B"
+    is_local: true
+    icon: cpu
+
+services:
+  - name: Pi-hole
+    type: docker
+    container: pihole
+    icon: shield
+    group: Network
+
+  - name: SSH
+    type: tcp
+    host_address: 127.0.0.1
+    port: 22
+    icon: terminal
+    group: Infrastructure
+
+network:
+  internet_target: 1.1.1.1
+  devices: []
+
+display:
+  screen_timeout: never   # kiosk displays generally shouldn't sleep
+
+demo_mode: false

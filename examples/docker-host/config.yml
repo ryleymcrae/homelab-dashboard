@@ -1,0 +1,46 @@
+# Example: a single Docker host running several containers, monitored
+# and controlled entirely via the Docker adapter.
+dashboard:
+  title: "Docker Homelab"
+
+hosts:
+  - name: docker-host
+    is_local: true
+    icon: server
+
+services:
+  - name: Plex
+    type: docker
+    container: plex
+    icon: film
+    group: Media
+
+  - name: Jellyfin
+    type: docker
+    container: jellyfin
+    icon: film
+    group: Media
+
+  - name: Home Assistant
+    type: docker
+    container: homeassistant
+    icon: home
+    group: Automation
+
+  - name: Nextcloud
+    type: docker
+    container: nextcloud
+    icon: cloud
+    group: Storage
+
+  - name: Portainer
+    type: docker
+    container: portainer
+    icon: cube
+    group: Infrastructure
+
+integrations:
+  docker_enabled: true
+  docker_socket: unix:///var/run/docker.sock
+
+demo_mode: false

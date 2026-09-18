@@ -1,0 +1,173 @@
+# ============================================================================
+# Homelab Dashboard configuration
+#
+# Copy this file to config.yml and edit it to describe YOUR environment.
+# Nothing in this application is hard-coded to a specific host, container,
+# or service -- everything below is what makes the dashboard yours.
+#
+# Full field reference: docs/configuration.md
+# ============================================================================
+
+dashboard:
+  title: "My Homelab"
+  tagline: "Small Servers. Big Adventures."
+  theme: dark   # dark | light
+
+# ----------------------------------------------------------------------------
+# Hosts
+# Every host below gets its own card on Home/System and its own entry on
+# Network -- there's nothing special about any one of them. One entry
+# should have `is_local: true` -- that's the machine the dashboard
+# backend itself runs on, and it uses native psutil collectors. Every
+# other host is monitored via reachability checks by default; point
+# `agent_url` at a lightweight remote agent for full metrics (docs/architecture.md).
+# ----------------------------------------------------------------------------
+hosts:
+  - name: ziri-mini
+    model: "Lenovo M720q"
+    is_local: true
+    icon: server
+
+  - name: nas
+    address: 192.168.1.20
+    icon: hard-drive
+
+  - name: raspberry-pi
+    address: 192.168.1.50
+    icon: cpu
+
+# ----------------------------------------------------------------------------
+# Services
+# Each service becomes a card on Home/Services and a detail page. `type`
+# selects the adapter; only the fields relevant to that type are required.
+# ----------------------------------------------------------------------------
+services:
+  # Docker container
+  - name: Plex
+    type: docker
+    container: plex
+    host: ziri-mini
+    icon: film
+    # `icon` also accepts a URL or /-rooted path to a custom image
+    # instead of a built-in glyph name -- e.g. icon: /icons/plex.png
+    # `banner` is optional splash art shown on this service's detail
+    # page; drop your own image into frontend/public/ and reference it
+    # the same way -- see docs/configuration.md#splash-art-banner.
+    banner: /banners/plex-demo.svg
+    group: Media
+
+  - name: Jellyfin
+    type: docker
+    container: jellyfin
+    host: nas
+    icon: film
+    group: Media
+    visible: false   # configured but hidden from the dashboard
+
+  # systemd unit
+  - name: Nginx
+    type: systemd
+    unit: nginx.service
+    host: ziri-mini
+    icon: server
+    group: Infrastructure
+
+  # HTTP health check
+  - name: Home Assistant
+    type: http
+    url: http://192.168.1.15:8123
+    icon: home
+    group: Automation
+    health_check:
+      interval_seconds: 15
+      timeout_seconds: 3
+
+  # TCP port check (works for anything: game servers, SSH, databases...)
+  - name: Minecraft
+    type: tcp
+    host_address: 192.168.1.30
+    port: 25565
+    icon: cube
+    group: Games
+
+  - name: SSH
+    type: tcp
+    host_address: 192.168.1.11
+    port: 22
+    icon: terminal
+    group: Infrastructure
+
+  # Prometheus-derived metric (optional integration, never required)
+  - name: Ingress Requests
+    type: prometheus
+    prometheus_url: http://192.168.1.40:9090
+    prometheus_query: 'sum(rate(nginx_ingress_requests_total[5m]))'
+    icon: activity
+    group: Infrastructure
+
+  # Custom plugin example (see docs/plugins.md)
+  - name: Dragonwilds
+    type: custom
+    plugin: example-game-server
+    plugin_options:
+      status_url: http://192.168.1.30:8211/status
+    icon: flame
+    group: Games
+
+# ----------------------------------------------------------------------------
+# Network
+# Hosts declared above with an `address` already show up here automatically
+# (kind: "host") -- `devices` below is only for network-only things that
+# aren't full hosts (switches, sensors, IoT gadgets...).
+# ----------------------------------------------------------------------------
+network:
+  interface: null            # null = auto-detect
+  internet_target: 1.1.1.1
+  gateway_override: null     # null = auto-detect from routing table
+  devices:
+    - name: ESP32 Sensor
+      address: 192.168.1.60
+      icon: microchip
+
+# ----------------------------------------------------------------------------
+# Historical metrics storage
+# ----------------------------------------------------------------------------
+history:
+  retention_days: 14
+  sample_interval_seconds: 30
+  max_rows_per_series: 50000
+
+# ----------------------------------------------------------------------------
+# Display / kiosk preferences
+# ----------------------------------------------------------------------------
+display:
+  brightness_supported: false
+  auto_dim: true
+  dim_delay_minutes: 5
+  screen_timeout: never
+  kiosk_url_path: /
+
+# ----------------------------------------------------------------------------
+# Integrations
+# ----------------------------------------------------------------------------
+integrations:
+  docker_enabled: true
+  docker_socket: unix:///var/run/docker.sock
+  systemd_enabled: true
+  prometheus_enabled: false
+
+# ----------------------------------------------------------------------------
+# Authentication
+# Set the DASHBOARD_PASSWORD environment variable (never here in
+# config.yml) to require a login for everyone except the IPs/CIDRs listed
+# below. Leaving DASHBOARD_PASSWORD unset disables login entirely -- the
+# default, so existing installs are unaffected. See docs/security.md.
+# ----------------------------------------------------------------------------
+auth:
+  trusted_ips: []
+    # - 192.168.1.50   # e.g. your kiosk touchscreen's LAN IP -- never logs in
+
+# Set true to run the UI against realistic simulated data instead of real
+# collectors -- useful for development, screenshots, or a first look
+# before you've configured anything real.
+demo_mode: false

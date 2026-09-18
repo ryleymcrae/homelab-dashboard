@@ -1,0 +1,24 @@
+[Unit]
+Description=Homelab Dashboard backend
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homelab-dashboard
+Group=homelab-dashboard
+WorkingDirectory=/opt/homelab-dashboard
+Environment=DASHBOARD_CONFIG=/etc/homelab-dashboard/config.yml
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/homelab-dashboard/.venv/bin/uvicorn backend.api.main:app --host 0.0.0.0 --port 8080
+Restart=on-failure
+RestartSec=3
+
+# Hardening. Adjust ReadWritePaths if you relocate /data.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/data /etc/homelab-dashboard
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
