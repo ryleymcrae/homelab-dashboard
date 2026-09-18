@@ -34,7 +34,7 @@ server.
 ## Quick start
 
 ```bash
-git clone <repository-url> homelab-dashboard
+git clone https://github.com/ryleymcrae/homelab-dashboard homelab-dashboard
 cd homelab-dashboard
 cp config.example.yml config.yml
 # edit config.yml to describe your hosts and services
