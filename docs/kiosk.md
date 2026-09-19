@@ -9,7 +9,7 @@ in any browser.
 On the Pi (Raspberry Pi OS with a desktop environment):
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/ryleymcrae/homelab-dashboard/ homelab-dashboard
 cd homelab-dashboard
 ./deploy/kiosk/install-kiosk.sh http://<dashboard-host>:8080
 sudo reboot
