@@ -13,6 +13,7 @@ Status.OFFLINE with a FailureDetail -- it never crashes other collectors.
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from typing import Optional
 
 from backend.adapters.base import AdapterError, ServiceAdapter, describe_exception
@@ -42,37 +43,123 @@ except ImportError:  # docker SDK not installed in this environment
     DOCKER_SDK_AVAILABLE = False
 
 
-_client = None
-_client_error: Optional[str] = None
+@dataclass(frozen=True)
+class DockerEndpoint:
+    """One Docker Engine API: the local socket (integrations.docker_socket)
+    or a `docker_api` connection's URL + optional client-cert TLS files
+    (integrations.connections, assigned to a host in Settings > Devices)."""
+
+    url: str
+    tls_cert: Optional[str] = None
+    tls_key: Optional[str] = None
+    tls_ca: Optional[str] = None
+
+    @classmethod
+    def from_connection(cls, conn) -> "DockerEndpoint":
+        return cls(conn.docker_url, conn.docker_tls_cert_path, conn.docker_tls_key_path, conn.docker_tls_ca_path)
 
 
-def get_docker_client(socket_url: str = "unix:///var/run/docker.sock"):
-    """Lazily create a single shared Docker client. Returns None (and
-    records the error) if Docker is unreachable -- callers must handle
-    that gracefully rather than raising."""
-    global _client, _client_error
+LOCAL_SOCKET = DockerEndpoint("unix:///var/run/docker.sock")
+
+# One lazily created client per endpoint (there used to be a single
+# global, which silently reused whichever endpoint connected first).
+_clients: dict[DockerEndpoint, object] = {}
+_client_errors: dict[DockerEndpoint, str] = {}
+
+
+def _endpoint(endpoint: DockerEndpoint | str) -> DockerEndpoint:
+    return DockerEndpoint(endpoint) if isinstance(endpoint, str) else endpoint
+
+
+def connect(endpoint: DockerEndpoint | str):
+    """A new, uncached client that has answered a ping. Raises on failure --
+    for connection tests (backend/integrations/base.py), which want the
+    real error, not a cached client."""
     if not DOCKER_SDK_AVAILABLE:
-        _client_error = "docker SDK not installed"
-        return None
-    if _client is not None:
-        return _client
+        raise RuntimeError("docker SDK not installed")
+    ep = _endpoint(endpoint)
+    tls = None
+    if ep.tls_cert or ep.tls_key or ep.tls_ca:
+        cert = (ep.tls_cert, ep.tls_key) if ep.tls_cert and ep.tls_key else None
+        tls = docker.tls.TLSConfig(client_cert=cert, ca_cert=ep.tls_ca, verify=ep.tls_ca or True)
+    client = docker.DockerClient(base_url=ep.url, tls=tls, timeout=5)
     try:
-        _client = docker.DockerClient(base_url=socket_url, timeout=5)
-        _client.ping()
-        _client_error = None
-        return _client
+        client.ping()
+    except Exception:
+        client.close()
+        raise
+    return client
+
+
+def get_docker_client(endpoint: DockerEndpoint | str = LOCAL_SOCKET):
+    """Lazily create (and keep) one client per endpoint. Returns None (and
+    records the error) if that Docker is unreachable -- callers must
+    handle that gracefully rather than raising."""
+    ep = _endpoint(endpoint)
+    if ep in _clients:
+        return _clients[ep]
+    try:
+        _clients[ep] = connect(ep)
+        _client_errors.pop(ep, None)
+        return _clients[ep]
     except Exception as exc:  # noqa: BLE001 - Docker can raise many types
-        _client_error = str(exc)
-        _client = None
+        _client_errors[ep] = describe_exception(exc)
         return None
 
 
-def list_discoverable_containers(socket_url: str = "unix:///var/run/docker.sock") -> list[dict]:
+def client_error(endpoint: DockerEndpoint | str) -> str:
+    return _client_errors.get(_endpoint(endpoint), "unknown error")
+
+
+def forget_client(endpoint: DockerEndpoint | str) -> None:
+    """Drop a cached client after a call through it failed, so the next
+    poll reconnects (e.g. a remote daemon that restarted) instead of
+    reusing a dead connection forever."""
+    client = _clients.pop(_endpoint(endpoint), None)
+    if client is not None:
+        try:
+            client.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def host_info(endpoint: DockerEndpoint | str) -> dict:
+    """`docker info` for a host sourced from a Docker API connection
+    (backend/collectors/hosts.py). Raises if unreachable."""
+    client = get_docker_client(endpoint)
+    if client is None:
+        raise RuntimeError(client_error(endpoint))
+    try:
+        return client.info()
+    except Exception:
+        forget_client(endpoint)
+        raise
+
+
+def info_metrics(info: dict) -> list[Metric]:
+    """What a Docker API adds to a host's Detailed Metrics."""
+    rows = [
+        ("docker_version", "Docker version", info.get("ServerVersion")),
+        ("docker_containers_running", "Containers running", info.get("ContainersRunning")),
+        ("docker_containers_stopped", "Containers stopped", info.get("ContainersStopped")),
+        ("docker_images", "Images", info.get("Images")),
+        ("docker_os", "Operating system", info.get("OperatingSystem")),
+        ("docker_kernel", "Kernel", info.get("KernelVersion")),
+        ("docker_arch", "Architecture", info.get("Architecture")),
+    ]
+    return [
+        Metric(key=key, label=label, value=value, type=MetricType.COUNT if isinstance(value, int) else MetricType.TEXT)
+        for key, label, value in rows
+        if value is not None
+    ]
+
+
+def list_discoverable_containers(endpoint: DockerEndpoint | str = LOCAL_SOCKET) -> list[dict]:
     """Enumerate ALL running/stopped containers for the setup/discovery UI.
     Per spec section 20, discovery is separate from monitoring: this does
     NOT add anything to the dashboard, it just lists what's available so
     the user can choose."""
-    client = get_docker_client(socket_url)
+    client = get_docker_client(endpoint)
     if client is None:
         return []
     results = []
@@ -94,13 +181,15 @@ def list_discoverable_containers(socket_url: str = "unix:///var/run/docker.sock"
 
 class DockerAdapter(ServiceAdapter):
     def __init__(
-        self, service_id: str, name: str, container: str, socket_url: str,
+        self, service_id: str, name: str, container: str, endpoint: DockerEndpoint | str,
         status_url: Optional[str] = None, a2s_port: Optional[int] = None,
         a2s_address: Optional[str] = None, **options,
     ):
         super().__init__(service_id, name, **options)
         self.container_name = container
-        self.socket_url = socket_url
+        # The local socket, or the Docker API assigned to this service's
+        # host (backend/adapters/factory.py decides which).
+        self.endpoint = _endpoint(endpoint)
         self.status_url = status_url
         self.a2s_port = a2s_port
         self.a2s_address = a2s_address
@@ -124,7 +213,7 @@ class DockerAdapter(ServiceAdapter):
         ]
 
     async def get_status(self) -> Service:
-        client = get_docker_client(self.socket_url)
+        client = get_docker_client(self.endpoint)
         if client is None:
             return Service(
                 id=self.service_id,
@@ -135,7 +224,7 @@ class DockerAdapter(ServiceAdapter):
                 banner=self.options.get("banner"),
                 failure=FailureDetail(
                     reason="docker_unavailable",
-                    message=f"Cannot reach Docker daemon: {_client_error or 'unknown error'}",
+                    message=f"Cannot reach Docker at {self.endpoint.url}: {client_error(self.endpoint)}",
                 ),
             )
         try:
@@ -234,9 +323,9 @@ class DockerAdapter(ServiceAdapter):
         return True
 
     async def get_logs(self, lines: int = 200) -> list[LogLine]:
-        client = get_docker_client(self.socket_url)
+        client = get_docker_client(self.endpoint)
         if client is None:
-            raise AdapterError(f"Docker unavailable: {_client_error}")
+            raise AdapterError(f"Docker unavailable: {client_error(self.endpoint)}")
         try:
             c = client.containers.get(self.container_name)
             raw = c.logs(tail=lines, timestamps=True).decode("utf-8", errors="replace")
@@ -245,9 +334,9 @@ class DockerAdapter(ServiceAdapter):
         return [_parse_docker_log_line(line) for line in raw.splitlines() if line]
 
     async def execute_action(self, action_kind: str) -> Service:
-        client = get_docker_client(self.socket_url)
+        client = get_docker_client(self.endpoint)
         if client is None:
-            raise AdapterError(f"Docker unavailable: {_client_error}")
+            raise AdapterError(f"Docker unavailable: {client_error(self.endpoint)}")
         try:
             c = client.containers.get(self.container_name)
             if action_kind == ActionKind.START.value:

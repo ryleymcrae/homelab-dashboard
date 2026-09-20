@@ -76,6 +76,120 @@ button {
   padding: var(--space-3) var(--space-4);
 }
 
+/* A lightweight grouping of stat/gauge tiles *inside* a .card -- each
+   tile is separated by a hairline instead of getting its own
+   border/shadow, so a section reads as one panel (control-panel style)
+   rather than a grid of small cards nested inside a bigger one. */
+.tile-row {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.tile {
+  flex: 1 1 140px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: var(--space-3);
+}
+
+.tile-row .tile + .tile {
+  border-left: 1px solid var(--color-border);
+}
+
+@media (max-width: 560px) {
+  .tile-row {
+    flex-direction: column;
+  }
+  .tile-row .tile + .tile {
+    border-left: none;
+    border-top: 1px solid var(--color-border);
+  }
+}
+
+/* A plain horizontal rule between sections of the same card (e.g. a
+   host's identity row and its action buttons), lighter than a nested
+   .card would be. */
+.card-divider {
+  border: none;
+  border-top: 1px solid var(--color-border);
+  margin: var(--space-3) 0;
+}
+
+/* A row inside a .card panel (e.g. one service in the Services panel) --
+   a hover highlight instead of its own border/shadow, so a list of these
+   reads as one grouped panel rather than a grid of small cards nested
+   inside a bigger one. */
+/* Hover highlights are only for devices that actually hover: on a
+   touchscreen, :hover sticks to whatever was last tapped. */
+.list-row {
+  display: flex;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  margin: 0 calc(var(--space-2) * -1);
+  text-decoration: none;
+  color: inherit;
+  transition: background 0.15s ease;
+}
+
+@media (hover: hover) {
+  .list-row:hover {
+    background: var(--color-surface-2);
+  }
+}
+
+/* A borderless icon-only trigger (e.g. a "..." kebab menu button) --
+   .btn's default border/min-width don't suit an icon. The glyph stays
+   small; the hit area is a full touch target. */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--touch-target);
+  height: var(--touch-target);
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .icon-btn:hover {
+    background: var(--color-surface-2);
+    color: var(--color-text);
+  }
+}
+
+/* A dropdown/context menu item -- a clean list with hairline dividers
+   between options instead of each one being its own bordered .btn box. */
+.menu-item {
+  display: block;
+  width: 100%;
+  min-height: var(--touch-target);
+  text-align: right;
+  background: transparent;
+  border: none;
+  padding: 8px 12px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .menu-item:hover {
+    background: var(--color-surface-2);
+  }
+}
+
+.menu-item + .menu-item {
+  border-top: 1px solid var(--color-border);
+}
+
 .section-title {
   font-size: var(--text-sm);
   font-weight: 600;
@@ -146,3 +260,818 @@ button {
 ::-webkit-scrollbar-track { background: transparent; }
 
 a { color: inherit; }
+
+/* ------------------------------------------------------------------
+   Settings page (frontend/src/pages/SettingsPage.tsx + pages/settings/).
+   Every control is sized to --touch-target: a kiosk touchscreen is this
+   app's least forgiving input, so nothing here relies on a native
+   checkbox or a thin input a finger can miss.
+   ------------------------------------------------------------------ */
+
+.page.settings {
+  flex-direction: row;
+  align-items: stretch;
+  overflow: hidden;
+}
+
+.settings__nav {
+  width: 210px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  /* Scroll shadows, so a list cut off at 800x480 visibly continues: the
+     two `local` covers scroll with the list and hide each `scroll` glow
+     once that end is reached. */
+  background:
+    linear-gradient(var(--color-bg) 30%, transparent) top / 100% 32px no-repeat local,
+    linear-gradient(transparent, var(--color-bg) 70%) bottom / 100% 32px no-repeat local,
+    radial-gradient(farthest-side at 50% 0, var(--color-border-strong), transparent) top / 100% 12px no-repeat scroll,
+    radial-gradient(farthest-side at 50% 100%, var(--color-border-strong), transparent) bottom / 100% 12px no-repeat scroll;
+}
+
+.settings__content {
+  flex: 1;
+  min-width: 0;
+  /* Past this, a label drifts so far from its control on a desktop
+     monitor that the row stops reading as one setting. */
+  max-width: 880px;
+  overflow-y: auto;
+}
+
+.settings-search {
+  position: relative;
+  margin-bottom: var(--space-2);
+  flex-shrink: 0;
+}
+
+.settings-search .field {
+  width: 100%;
+  padding-right: var(--touch-target);
+}
+
+.settings-search .field::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+}
+
+.settings-search__clear {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: var(--touch-target);
+  height: 100%;
+  border: none;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.settings-nav__item,
+.settings-result {
+  display: flex;
+  flex-shrink: 0;
+  min-height: var(--touch-target);
+  padding: 0 var(--space-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-nav__item {
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-base);
+  font-weight: 600;
+}
+
+.settings-result[aria-current="true"] {
+  background: var(--color-surface-2);
+}
+
+@media (hover: hover) {
+  .settings-nav__item:hover,
+  .settings-result:hover {
+    background: var(--color-surface-2);
+  }
+}
+
+.settings-nav__item[aria-current="page"] {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+.settings-nav__icon {
+  width: 20px;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+.settings-nav__item[aria-current="page"] .settings-nav__icon {
+  color: var(--color-primary);
+}
+
+.settings-results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-results .settings-result {
+  width: 100%;
+}
+
+.settings-result {
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.settings-result__label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.settings-result__crumb {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+.settings__heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding-bottom: var(--space-3);
+  margin-bottom: var(--space-1);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.settings__heading h2 {
+  margin: 0 0 2px;
+  font-size: var(--text-lg);
+}
+
+.settings__back {
+  display: none;
+  width: var(--touch-target);
+  padding: 0;
+  font-size: 22px;
+}
+
+.settings__save-state {
+  min-width: 64px;
+  text-align: right;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.settings-section-header {
+  margin: var(--space-5) 0 0;
+}
+
+.settings-note {
+  margin: var(--space-1) 0 var(--space-2);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  color: var(--color-text-muted);
+}
+
+.settings-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
+  padding: 8px 10px;
+  border: 1px solid;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+}
+
+.settings-banner--warning { color: var(--color-warning); background: var(--color-warning-soft); border-color: var(--color-warning); }
+.settings-banner--danger { color: var(--color-danger); background: var(--color-danger-soft); border-color: var(--color-danger); }
+
+/* One setting: label/help text left, control right; the control wraps
+   underneath rather than squeezing the label on a narrow screen. */
+.setting-row {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+  min-height: 56px;
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.setting-row__text {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.setting-row__label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.setting-row__desc {
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--color-text-muted);
+}
+
+.setting-row__control {
+  display: flex;
+  justify-content: flex-end;
+  max-width: 100%;
+}
+
+/* Highlight left behind by a search jump / deep link. */
+.setting-flash {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary-soft);
+  box-shadow: inset 0 0 0 1px var(--color-primary);
+  pointer-events: none;
+  animation: setting-flash 2s ease-out forwards;
+}
+
+.setting-row > .setting-flash {
+  left: calc(var(--space-2) * -1);
+  right: calc(var(--space-2) * -1);
+}
+
+@keyframes setting-flash {
+  0%, 50% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* A notifier / connection / widget / host inside a settings category. */
+.settings-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: var(--space-3) 0;
+}
+
+.settings-item--draft {
+  border-style: dashed;
+  border-color: var(--color-primary);
+}
+
+.settings-item__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.settings-item__title {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.btn--icon {
+  width: var(--touch-target);
+  padding: 0;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+a.chip {
+  min-height: var(--touch-target);
+}
+
+@media (hover: hover) {
+  a.chip:hover {
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+  }
+}
+
+.field {
+  min-width: 0;
+  max-width: 100%;
+  min-height: var(--touch-target);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: var(--text-sm);
+}
+
+.field:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+.field:disabled,
+.color-field:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.field--number {
+  width: 84px;
+  text-align: right;
+}
+
+/* Fixed width so fields line up whatever their unit (%, °C, min). */
+.field-suffix {
+  min-width: 28px;
+  margin: 0;
+}
+
+.color-field {
+  width: 56px;
+  height: var(--touch-target);
+  padding: 3px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+  cursor: pointer;
+}
+
+/* On/off switch: a --touch-target-tall transparent button, with the
+   track (::before) and knob (::after) drawn inside it, so the hit area
+   is bigger than the visible pill. */
+.toggle {
+  position: relative;
+  flex-shrink: 0;
+  width: 56px;
+  height: var(--touch-target);
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+.toggle::before,
+.toggle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.toggle::before {
+  left: 4px;
+  right: 4px;
+  height: 28px;
+  margin-top: -14px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  background: var(--color-surface-2);
+}
+
+.toggle::after {
+  left: 8px;
+  width: 20px;
+  height: 20px;
+  margin-top: -10px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+}
+
+.toggle[aria-checked="true"]::before {
+  border-color: var(--color-primary-strong);
+  background: var(--color-primary);
+}
+
+.toggle[aria-checked="true"]::after {
+  transform: translateX(20px);
+  background: white;
+}
+
+.toggle:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  overflow: hidden;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+}
+
+.segmented button {
+  min-height: calc(var(--touch-target) - 2px);
+  min-width: 44px;
+  padding: 0 var(--space-3);
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.segmented button + button {
+  border-left: 1px solid var(--color-border-strong);
+}
+
+.segmented button[aria-pressed="true"] {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+.segmented button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Phone-width: master/detail instead of side-by-side -- the category
+   list (or search results) *or* one category, never both squeezed. */
+@media (max-width: 640px) {
+  .page.settings {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  .settings__nav {
+    width: 100%;
+    overflow: visible;
+    background: none;
+  }
+  .settings__content {
+    overflow: visible;
+  }
+  .settings[data-view="master"] .settings__content,
+  .settings[data-view="detail"] .settings__nav {
+    display: none;
+  }
+  .settings__back {
+    display: inline-flex;
+  }
+  /* A control that wrapped under its label gets the full row. */
+  .setting-row__control {
+    flex: 1 1 auto;
+  }
+  .setting-row__control > input.field:not(.field--number),
+  .setting-row__control > select.field {
+    width: 100% !important;
+  }
+}
+
+.settings-banner--info { color: var(--color-text); background: var(--color-primary-soft); border-color: var(--color-primary); }
+
+/* Collapsible list item (a host, a service, a network device). */
+.settings-item__summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: var(--touch-target);
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-item__titles {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.settings-item__subtitle {
+  overflow: hidden;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.settings-item__chevron {
+  width: 20px;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+.settings-item__body {
+  margin-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+}
+
+.settings-item__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+}
+
+.btn--danger-ghost {
+  border-color: var(--color-danger);
+  background: transparent;
+  color: var(--color-danger);
+}
+
+.field--textarea {
+  width: 100%;
+  min-height: 96px;
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-mono);
+  resize: vertical;
+}
+
+.chip__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin-left: 2px;
+  border: none;
+  border-radius: 999px;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.chip__remove:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* A tappable metric tile (drill into that host's detail). Keeps .tile's
+   layout; only adds button resets and a pressed/hover state. */
+.tile--button {
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font-family: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .tile--button:hover {
+    background: var(--color-surface-2);
+  }
+}
+
+.tile--button:active {
+  transform: translateY(1px);
+}
+
+.tile--bar .meter {
+  margin-top: var(--space-1);
+}
+
+.meter {
+  width: 100%;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-border);
+}
+
+.meter__fill {
+  height: 100%;
+  border-radius: inherit;
+  transition: width 0.6s ease;
+}
+
+/* Icon picker (components/IconPicker.tsx) -- inside Modal's "panel" size. */
+.picker__header,
+.picker__footer {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.picker__header {
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.picker__footer {
+  justify-content: flex-end;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+}
+
+.picker__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-height: 0;
+  padding: var(--space-3) 0;
+  overflow-y: auto;
+}
+
+.glyph-grid,
+.asset-grid {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.glyph-grid {
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+}
+
+.asset-grid {
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+}
+
+.glyph-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 64px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.glyph-option[aria-pressed="true"],
+.asset-tile__image[aria-pressed="true"] {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary);
+}
+
+.glyph-option__glyph {
+  font-size: 22px;
+  line-height: 1;
+  color: var(--color-primary);
+}
+
+.glyph-option__name {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 10px;
+  color: var(--color-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.asset-tile__image {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 80px;
+  padding: var(--space-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+}
+
+button.asset-tile__image {
+  cursor: pointer;
+}
+
+.asset-tile__image img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.asset-tile--upload {
+  align-items: center;
+  justify-content: center;
+  height: 80px;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-text-muted);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.icon-preview {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+  color: var(--color-primary);
+}
+
+.banner-thumb {
+  width: 96px;
+  height: 54px;
+  object-fit: cover;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+/* History charts (charts/TimeSeriesChart.tsx). */
+.chart-toggle {
+  min-height: 32px;
+  margin-left: auto;
+  padding: 0 var(--space-3);
+  font-size: var(--text-xs);
+}
+
+.chart-toggle[aria-pressed="true"] {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+.chart-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.chart-readout {
+  position: absolute;
+  top: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-elevated);
+  box-shadow: var(--shadow-card);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: nowrap;
+  pointer-events: auto;
+}
+
+.chart-readout__time {
+  color: var(--color-text-muted);
+}
+
+/* A collapsible section's title bar (Devices page) -- the whole title
+   is the tap target, at least --touch-target tall. */
+.collapsible__toggle {
+  display: flex;
+  flex: 1 1 200px;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: var(--touch-target);
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}

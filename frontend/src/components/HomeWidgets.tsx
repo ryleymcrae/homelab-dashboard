@@ -1,74 +1,40 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { api } from "../api/client";
-import { Gauge } from "../charts/Gauge";
-import { Sparkline } from "../charts/Sparkline";
+import { useNavigate } from "react-router-dom";
+import { METRIC_LABEL, describeMetric, resolveMetricDisplay } from "../api/metrics";
+import { HostMetricTile } from "./HostMetricTile";
+import { useHostHistory } from "../hooks/useHostHistory";
+import { useSnapshot } from "../hooks/SnapshotContext";
 import { ServiceIcon } from "./ServiceIcon";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { useActionDetails } from "../hooks/useActionDetails";
 import { useAuth } from "../hooks/AuthContext";
 import type { HostInfo, WidgetConfig } from "../api/types";
 
-const METRIC_INFO: Record<
-  NonNullable<WidgetConfig["metric"]>,
-  { label: string; unit: string; color: string; historySeries: string | null; value: (h: HostInfo) => number | null | undefined }
-> = {
-  cpu: { label: "CPU", unit: "%", color: "var(--color-primary)", historySeries: "cpu", value: (h) => h.cpuPercent },
-  mem: { label: "MEMORY", unit: "%", color: "var(--color-success)", historySeries: "mem", value: (h) => h.memPercent },
-  disk: { label: "STORAGE", unit: "%", color: "var(--color-primary)", historySeries: null, value: (h) => h.diskPercent },
-  temp: { label: "TEMP", unit: "°C", color: "var(--color-warning)", historySeries: null, value: (h) => h.temperatureC },
-};
-
 /**
- * A single host+metric+display-style tile -- the "per-widget
- * configuration" piece of the Home layout system. Reuses the exact same
- * Gauge/Sparkline components System/HostCard already use; this never
- * introduces a new visualization, just a smaller, individually
- * placeable slice of the ones that already existed.
+ * A single host+metric tile -- the "per-widget configuration" piece of the
+ * Home layout system. Drawn by the same HostMetricTile as the host tile
+ * row, in the style dashboard.metric_display sets for that metric unless
+ * this widget overrides it (`display`); the color is always
+ * metric_display's (frontend/src/api/metrics.ts).
  */
 export function HostMetricWidget({ host, metric, display }: { host: HostInfo; metric: WidgetConfig["metric"]; display: WidgetConfig["display"] }) {
-  const [history, setHistory] = useState<number[]>([]);
-  const info = metric ? METRIC_INFO[metric] : null;
-  const value = info ? info.value(host) : null;
+  const { snapshot } = useSnapshot();
+  const navigate = useNavigate();
+  const resolved = metric ? resolveMetricDisplay(snapshot?.dashboard.metricDisplay, metric, display) : null;
+  const history = useHostHistory(host.id, resolved?.style === "sparkline");
 
-  useEffect(() => {
-    if (display !== "sparkline" || !info?.historySeries) return;
-    let cancelled = false;
-    api
-      .getHistory(`host.${host.id}.${info.historySeries}`, 6)
-      .then((d) => !cancelled && setHistory(d.points.map((p) => p.value)))
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [display, host.id, info?.historySeries]);
-
-  if (!info) return null;
-  const displayValue = value != null ? `${value}${info.unit}` : "N/A";
-  const title = `${info.label} · ${host.name.toUpperCase()}`;
-
-  if (display === "numeric") {
-    return (
-      <div className="card">
-        <div className="section-title">{title}</div>
-        <div style={{ fontSize: "var(--text-xl)", fontWeight: 700 }}>{displayValue}</div>
-      </div>
-    );
-  }
-
-  if (display === "sparkline") {
-    return (
-      <div className="card">
-        <div className="section-title">{title}</div>
-        <div style={{ fontSize: "var(--text-lg)", fontWeight: 700, marginBottom: 6 }}>{displayValue}</div>
-        <Sparkline values={history} color={info.color} />
-      </div>
-    );
-  }
-
+  if (!metric || !resolved) return null;
+  const reading = describeMetric(host, metric, snapshot?.alertThresholds?.[host.id]);
   return (
-    <div className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
-      <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", fontWeight: 600 }}>{host.name.toUpperCase()}</div>
-      <Gauge label={info.label} value={value ?? null} displayValue={displayValue} color={info.color} unavailable={value == null} />
+    <div className="card" style={{ padding: "var(--space-2)" }}>
+      <HostMetricTile
+        label={`${METRIC_LABEL[metric].toUpperCase()} · ${host.name.toUpperCase()}`}
+        {...reading}
+        history={metric === "cpu" ? history.cpu : metric === "mem" ? history.mem : undefined}
+        display={resolved}
+        onSelect={() => navigate(`/devices?host=${encodeURIComponent(host.id)}`)}
+      />
     </div>
   );
 }

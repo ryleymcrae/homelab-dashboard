@@ -39,7 +39,7 @@ _METRIC_LABELS = {
 _SERVICE_DOWN_STATUSES = (Status.OFFLINE, Status.UNKNOWN)
 
 
-def _merge_thresholds(default: ThresholdConfig, override: ThresholdConfig | None) -> ThresholdConfig:
+def merge_thresholds(default: ThresholdConfig, override: ThresholdConfig | None) -> ThresholdConfig:
     """A per-host/per-service override only replaces the fields it
     actually set in config.yml -- `model_fields_set` (not "is this field
     None") is what distinguishes "not specified, inherit the global
@@ -71,7 +71,7 @@ class AlertEvaluator:
         newly_triggered: list[Alert] = []
 
         for host in hosts:
-            thresholds = _merge_thresholds(config.defaults, config.host_overrides.get(host.name))
+            thresholds = merge_thresholds(config.defaults, config.host_overrides.get(host.name))
             for metric, value in (
                 ("cpu_percent", host.cpu_percent),
                 ("mem_percent", host.mem_percent),
@@ -92,7 +92,7 @@ class AlertEvaluator:
             )
 
         for service in services:
-            thresholds = _merge_thresholds(config.defaults, config.service_overrides.get(service.name))
+            thresholds = merge_thresholds(config.defaults, config.service_overrides.get(service.name))
             can_restart = any(a.kind.value == "restart" for a in service.actions)
             self._check_duration(
                 "service", service.id, service.name, "service_down",

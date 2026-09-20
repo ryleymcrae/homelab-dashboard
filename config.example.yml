@@ -79,7 +79,6 @@ services:
     icon: home
     group: Automation
     health_check:
-      interval_seconds: 15
       timeout_seconds: 3
 
   # TCP port check (works for anything: game servers, SSH, databases...)
@@ -121,7 +120,6 @@ services:
 # aren't full hosts (switches, sensors, IoT gadgets...).
 # ----------------------------------------------------------------------------
 network:
-  interface: null            # null = auto-detect
   internet_target: 1.1.1.1
   gateway_override: null     # null = auto-detect from routing table
   devices:
@@ -134,27 +132,14 @@ network:
 # ----------------------------------------------------------------------------
 history:
   retention_days: 14
-  sample_interval_seconds: 30
+  sample_interval_seconds: 30   # how often a history point is stored
   max_rows_per_series: 50000
-
-# ----------------------------------------------------------------------------
-# Display / kiosk preferences
-# ----------------------------------------------------------------------------
-display:
-  brightness_supported: false
-  auto_dim: true
-  dim_delay_minutes: 5
-  screen_timeout: never
-  kiosk_url_path: /
 
 # ----------------------------------------------------------------------------
 # Integrations
 # ----------------------------------------------------------------------------
 integrations:
-  docker_enabled: true
   docker_socket: unix:///var/run/docker.sock
-  systemd_enabled: true
-  prometheus_enabled: false
 
 # ----------------------------------------------------------------------------
 # Authentication

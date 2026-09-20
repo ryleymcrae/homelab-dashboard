@@ -185,6 +185,25 @@ export interface FleetSummary {
   containersTotal: number;
 }
 
+export type NavTab = "home" | "services" | "network" | "devices" | "alerts" | "settings";
+
+/** GET /api/assets -- an uploaded image and where config.yml uses it. */
+export interface AssetInfo {
+  name: string;
+  url: string;
+  size: number;
+  uploadedAt: number;
+  usedBy: string[];
+}
+
+export interface AlertThresholds {
+  cpuPercent?: number | null;
+  memPercent?: number | null;
+  diskPercent?: number | null;
+  /** Celsius, like every temperature from the API. */
+  tempC?: number | null;
+}
+
 export interface Snapshot {
   hosts: HostInfo[];
   overallStatus: Status;
@@ -196,7 +215,22 @@ export interface Snapshot {
     theme: "dark" | "light";
     accentColor?: string | null;
     density: "compact" | "comfortable";
+    /** IANA zone, or null for each viewer's own browser zone. */
+    timezone?: string | null;
+    /** Display only -- every temperature in the API is Celsius. */
+    temperatureUnit: "celsius" | "fahrenheit";
+    /** Icon references (glyph name, URL, or /api/assets/... path); null = built-in. */
+    logo?: string | null;
+    favicon?: string | null;
+    navIcons?: Partial<Record<NavTab, string>>;
+    /** Background grid on history charts. */
+    chartGrid?: boolean;
+    /** dashboard.metric_display -- see frontend/src/api/metrics.ts. */
+    metricDisplay?: Partial<Record<"cpu" | "mem" | "disk" | "temp", { style?: "numeric" | "sparkline" | "gauge" | "bar" | null; color?: string | null }>>;
   };
+  /** Each host's effective alert thresholds, keyed by HostInfo.id; empty
+   * when alerting is off. */
+  alertThresholds?: Record<string, AlertThresholds>;
   alertsActive: number;
   timestamp: number;
 }
@@ -245,11 +279,46 @@ export interface WidgetConfig {
   visible: boolean;
   host_id?: string | null;
   metric?: "cpu" | "mem" | "disk" | "temp" | null;
-  display?: "gauge" | "sparkline" | "numeric" | null;
+  /** null/absent = follow dashboard.metric_display for this metric. */
+  display?: "gauge" | "sparkline" | "numeric" | "bar" | null;
   group?: string | null;
   name?: string | null;
   icon?: string | null;
   target_type?: "service" | "host" | null;
   target_id?: string | null;
   action_kind?: string | null;
+}
+
+// A configured data source connection (Settings > Integrations). Also
+// snake_case/config-sourced, same reasoning as WidgetConfig above.
+export type IntegrationType = "docker_api" | "prometheus" | "node_exporter" | "ssh" | "custom_script";
+
+export interface IntegrationConfig {
+  id: string;
+  type: IntegrationType;
+  name: string;
+  enabled: boolean;
+  docker_url?: string | null;
+  docker_tls_cert_path?: string | null;
+  docker_tls_key_path?: string | null;
+  docker_tls_ca_path?: string | null;
+  prometheus_url?: string | null;
+  metrics_url?: string | null;
+  ssh_host?: string | null;
+  ssh_port?: number;
+  ssh_username?: string | null;
+  ssh_key_path?: string | null;
+  script_path?: string | null;
+}
+
+// GET /api/integrations -- a hand-written camelCase shape (like Alert
+// above), not a config dump: live/derived status, never persisted.
+export type IntegrationStatus = "connected" | "error" | "not_configured";
+
+export interface IntegrationStatusEntry {
+  id: string;
+  status: IntegrationStatus;
+  message?: string | null;
+  lastCheckedAt?: number | null;
+  lastSuccessAt?: number | null;
 }

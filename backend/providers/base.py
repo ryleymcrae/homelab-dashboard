@@ -184,7 +184,7 @@ class DashboardProvider(ABC):
     @abstractmethod
     async def get_fleet_summary(self) -> FleetSummary:
         """Aggregate totals across every host/service this provider knows
-        about -- backs the System page's fleet-wide overview."""
+        about -- backs the Devices page's fleet-wide overview."""
 
     @abstractmethod
     async def get_service_config(self, service_id: str) -> ServiceConfigState:

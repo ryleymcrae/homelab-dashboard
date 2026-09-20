@@ -12,7 +12,7 @@ import logging
 from backend.actions.executor import ActionValidationError
 from backend.actions.executor import execute_service_action as _run_adapter_action
 from backend.adapters.base import AdapterError, ServiceAdapter
-from backend.adapters.factory import build_all_adapters
+from backend.adapters.factory import build_all_adapters, service_id
 from backend.collectors import hosts as host_collector
 from backend.collectors import network as net_collector
 from backend.config.loader import ConfigStore
@@ -37,6 +37,16 @@ class LiveProvider(DashboardProvider):
         self._config_store = config_store
         self._history = history
         self.adapters: dict[str, ServiceAdapter] = build_all_adapters(config_store.config)
+        # No adapter sets Service.host itself (a Docker/systemd/HTTP/TCP/
+        # Prometheus adapter only knows about the thing it's monitoring,
+        # not which configured `hosts:` entry it happens to run on) --
+        # `host:` is overlaid centrally here, in one place, from
+        # ServiceConfig.host, the same "host's `name:`, not its slug"
+        # value DemoProvider's generator already uses (so a Home page
+        # "consolidate by host" grouping works identically in both modes).
+        self._service_hosts: dict[str, str | None] = {
+            service_id(cfg): cfg.host for cfg in config_store.config.services
+        }
 
     def rebuild_adapters(self) -> None:
         """Called after a config change (PATCH /api/config) so adapters
@@ -46,7 +56,7 @@ class LiveProvider(DashboardProvider):
         self.adapters = build_all_adapters(self._config_store.config)
 
     async def get_hosts(self) -> list[HostInfo]:
-        return await host_collector.build_all_hosts(self._config_store.config.hosts)
+        return await host_collector.build_all_hosts(self._config_store.config)
 
     async def get_host_detail(self, host_id: str) -> list[Metric]:
         cfg = next(
@@ -55,7 +65,7 @@ class LiveProvider(DashboardProvider):
         )
         if cfg is None:
             raise NotFoundError(f"Host '{host_id}' not found")
-        return await host_collector.get_host_detail(cfg)
+        return await host_collector.get_host_detail(cfg, self._config_store.config.docker_connection_for(cfg.name))
 
     async def get_services(self) -> list[Service]:
         async def _safe_status(adapter: ServiceAdapter) -> Service | None:
@@ -66,13 +76,20 @@ class LiveProvider(DashboardProvider):
                 return None
 
         results = await asyncio.gather(*(_safe_status(a) for a in self.adapters.values()))
-        return [s for s in results if s is not None]
+        services = [s for s in results if s is not None]
+        for s in services:
+            if s.host is None:
+                s.host = self._service_hosts.get(s.id)
+        return services
 
     async def get_service(self, service_id: str) -> Service:
         adapter = self.adapters.get(service_id)
         if not adapter:
             raise NotFoundError(f"Service '{service_id}' not found")
-        return await adapter.get_status()
+        service = await adapter.get_status()
+        if service.host is None:
+            service.host = self._service_hosts.get(service.id)
+        return service
 
     async def get_service_logs(self, service_id: str, lines: int) -> list[LogLine]:
         adapter = self.adapters.get(service_id)
@@ -100,7 +117,7 @@ class LiveProvider(DashboardProvider):
         targets = [await net_collector.check_internet(cfg.network.internet_target)]
         targets.append(await net_collector.check_gateway(cfg.network.gateway_override))
         for h in cfg.hosts:
-            # The local host's status is already front-and-center on Home/System;
+            # The local host's status is already front-and-center on Home/Devices;
             # every other configured host is reused here so it doesn't need to
             # be redeclared under `network.devices` to get a reachability check.
             if h.is_local or not h.address:

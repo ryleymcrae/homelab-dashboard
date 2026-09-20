@@ -6,6 +6,7 @@ REST contract the frontend depends on.
 import tempfile
 from pathlib import Path
 
+import httpx
 import pytest
 import yaml
 from fastapi.testclient import TestClient
@@ -27,18 +28,21 @@ def demo_client(monkeypatch):
         monkeypatch.setenv("DASHBOARD_HISTORY_DB", str(Path(tmp) / "history.sqlite3"))
         monkeypatch.setenv("DASHBOARD_AUDIT_DB", str(Path(tmp) / "audit.sqlite3"))
         monkeypatch.setenv("DASHBOARD_ALERTS_DB", str(Path(tmp) / "alerts.sqlite3"))
+        monkeypatch.setenv("DASHBOARD_ASSETS_DIR", str(Path(tmp) / "assets"))
 
         # Import after env vars are set so ConfigStore/HistoryStore pick them up on module load.
         import importlib
 
         import backend.api.main as main_module
         from backend.demo.runtime import runtime as demo_runtime
+        from backend.integrations import status as integration_status
 
         importlib.reload(main_module)
         # `runtime` is a module-level singleton (backend/demo/runtime.py),
         # not reset by reloading main_module -- clear it so one test's
         # simulated stop/restart can't leak into the next.
         demo_runtime.reset()
+        integration_status.reset()
         with TestClient(main_module.app) as client:
             yield client
 
@@ -355,7 +359,6 @@ def test_snooze_requires_numeric_minutes(demo_client):
 
 
 def test_notifier_test_send_missing_env_var(demo_client, monkeypatch):
-    monkeypatch.setattr("backend.notifications.base.SEND_DELAY_SCALE", 0)
     import backend.api.main as main_module
 
     main_module.config_store.update(
@@ -374,6 +377,62 @@ def test_notifier_test_send_unknown_id_404(demo_client):
     assert resp.status_code == 404
 
 
+def test_integrations_list_empty_initially(demo_client):
+    resp = demo_client.get("/api/integrations")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_integration_status_starts_not_configured(demo_client):
+    import backend.api.main as main_module
+
+    main_module.config_store.update(
+        {"integrations": {"connections": [{"id": "i1", "type": "prometheus", "name": "Prom", "prometheus_url": "http://10.0.0.6:9090"}]}}
+    )
+    entries = demo_client.get("/api/integrations").json()
+    assert entries == [{"id": "i1", "status": "not_configured", "message": None, "lastCheckedAt": None, "lastSuccessAt": None}]
+
+
+def _fake_prometheus(request: httpx.Request) -> httpx.Response:
+    if request.url.path == "/api/v1/status/buildinfo":
+        return httpx.Response(200, json={"status": "success", "data": {"version": "2.53.0"}})
+    return httpx.Response(200, json={"status": "success", "data": {"result": [{"value": [0, "1"]}, {"value": [0, "0"]}]}})
+
+
+def test_integration_test_connection_records_the_real_outcome(demo_client, monkeypatch):
+    import backend.api.main as main_module
+
+    monkeypatch.setattr("backend.integrations.base.HTTP_TRANSPORT", httpx.MockTransport(_fake_prometheus))
+    main_module.config_store.update(
+        {"integrations": {"connections": [{"id": "i1", "type": "prometheus", "name": "Prom", "prometheus_url": "http://prom.test:9090"}]}}
+    )
+    resp = demo_client.post("/api/integrations/i1/test")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    assert body["message"] == "Prometheus 2.53.0 -- 1 of 2 scrape targets up."
+    assert body["status"] == "connected"
+    assert body["lastCheckedAt"] is not None
+    assert body["lastSuccessAt"] == body["lastCheckedAt"]
+
+    entries = demo_client.get("/api/integrations").json()
+    assert entries[0]["status"] == "connected"
+
+    # And a failure is recorded as one, keeping the last success time.
+    monkeypatch.setattr("backend.integrations.base.HTTP_TRANSPORT", httpx.MockTransport(lambda r: httpx.Response(503)))
+    failed = demo_client.post("/api/integrations/i1/test").json()
+    assert failed["success"] is False and failed["status"] == "error"
+    assert failed["lastSuccessAt"] == body["lastSuccessAt"]
+
+    audit_entries = demo_client.get("/api/audit-log").json()
+    assert any(e["action"] == "integration_test" and e["target"] == "integration:i1" for e in audit_entries)
+
+
+def test_integration_test_connection_unknown_id_404(demo_client):
+    resp = demo_client.post("/api/integrations/does-not-exist/test")
+    assert resp.status_code == 404
+
+
 def test_fleet_summary_endpoint(demo_client):
     resp = demo_client.get("/api/fleet")
     assert resp.status_code == 200
@@ -389,3 +448,46 @@ def test_history_endpoint_supports_every_selectable_range(demo_client, hours):
     data = resp.json()
     assert data["series"] == "host.ziri-mini.cpu"
     assert len(data["points"]) > 0
+
+
+def test_history_limits_follow_config_without_a_restart(demo_client):
+    import backend.api.main as main_module
+
+    resp = demo_client.patch("/api/config", json={"history": {"retention_days": 3, "max_rows_per_series": 2000}})
+    assert resp.status_code == 200
+    assert main_module.history.retention_days == 3
+    assert main_module.history.max_rows_per_series == 2000
+
+
+def test_history_sample_records_every_host_and_network_series(demo_client, monkeypatch):
+    import backend.api.main as main_module
+
+    recorded: dict[str, float] = {}
+    monkeypatch.setattr(main_module.history, "record_many", lambda samples: recorded.update(samples))
+    main_module._record_history(
+        {"hosts": [{"id": "nas", "cpuPercent": 12.5, "memPercent": 40}, {"id": "offline-box", "cpuPercent": None}],
+         "network": {"traffic": {"downloadMbps": 3.0, "uploadMbps": 1.0}}}
+    )
+    assert recorded == {"host.nas.cpu": 12.5, "host.nas.mem": 40, "network.download_mbps": 3.0, "network.upload_mbps": 1.0}
+
+
+def test_snapshot_carries_display_preferences(demo_client):
+    dashboard = demo_client.get("/api/snapshot").json()["dashboard"]
+    assert dashboard["timezone"] is None and dashboard["temperatureUnit"] == "celsius"
+    demo_client.patch("/api/config", json={"dashboard": {"timezone": "Asia/Tokyo", "temperature_unit": "fahrenheit"}})
+    dashboard = demo_client.get("/api/snapshot").json()["dashboard"]
+    assert dashboard["timezone"] == "Asia/Tokyo" and dashboard["temperatureUnit"] == "fahrenheit"
+
+
+def test_snapshot_carries_metric_display_and_each_hosts_alert_thresholds(demo_client):
+    snap = demo_client.get("/api/snapshot").json()
+    assert snap["dashboard"]["metricDisplay"]["disk"] == {"style": "bar", "color": None}
+    assert snap["dashboard"]["chartGrid"] is True
+    host = snap["hosts"][0]
+    assert snap["alertThresholds"][host["id"]]["tempC"] == 70.0
+
+    demo_client.patch("/api/config", json={"alerting": {"host_overrides": {host["name"]: {"temp_c": 55}}}})
+    assert demo_client.get("/api/snapshot").json()["alertThresholds"][host["id"]]["tempC"] == 55.0
+
+    demo_client.patch("/api/config", json={"alerting": {"enabled": False}})
+    assert demo_client.get("/api/snapshot").json()["alertThresholds"] == {}

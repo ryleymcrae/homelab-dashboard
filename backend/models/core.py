@@ -390,7 +390,7 @@ class NetworkTarget:
 @dataclass
 class FleetSummary:
     """Aggregate totals across every configured host/service -- backs the
-    System page's fleet-wide overview. Every numeric total is Optional and
+    Devices page's fleet-wide overview. Every numeric total is Optional and
     simply omitted (never fabricated) when not every host can report the
     underlying figure -- e.g. `total_power_draw_w` stays None on real
     hardware until a power-sensing collector exists, exactly like a

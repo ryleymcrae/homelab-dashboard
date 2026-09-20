@@ -1,40 +1,24 @@
 import React, { useState } from "react";
+import { GLYPHS, isCustomImage } from "../api/icons";
 
-// Small, dependency-free glyph set so an icon name declared in config.yml
-// (spec section 5: `icon: plex`) always renders something reasonable
-// without requiring an icon library/network fetch. Unrecognized names
-// fall back to a generic box glyph -- never a broken image.
-const GLYPHS: Record<string, string> = {
-  server: "▢",
-  "hard-drive": "▤",
-  cpu: "▣",
-  film: "▶",
-  home: "⌂",
-  flame: "◆",
-  tree: "♣",
-  mountain: "▲",
-  terminal: "▚",
-  globe: "◎",
-  router: "◈",
-  plug: "⏚",
-  cube: "◼",
-  activity: "∿",
-  microchip: "▦",
-  cog: "⚙",
-  docker: "▧",
-};
+export { GLYPHS, isCustomImage };
 
-// `icon` can also be a URL/path to a custom image (config.yml:
-// `icon: /icons/plex.png` or a full https:// URL) instead of one of the
-// glyph names above -- lets a service show its own logo/art rather than
-// being limited to the built-in set.
-function isCustomImage(icon: string): boolean {
-  return !GLYPHS[icon] && (icon.startsWith("http://") || icon.startsWith("https://") || icon.startsWith("/"));
+/**
+ * An icon value rendered bare -- no box -- for the top bar and bottom
+ * nav. `fallback` is the literal glyph shown when `icon` is unset,
+ * unknown, or an image that fails to load.
+ */
+export function IconGlyph({ icon, fallback, size = 16 }: { icon?: string | null; fallback: string; size?: number }) {
+  const [imageFailed, setImageFailed] = useState<string | null>(null);
+  if (isCustomImage(icon) && imageFailed !== icon) {
+    return <img src={icon} alt="" width={size} height={size} style={{ objectFit: "contain", display: "block" }} onError={() => setImageFailed(icon)} />;
+  }
+  return <span style={{ fontSize: size, lineHeight: 1 }}>{(icon && GLYPHS[icon]) || fallback}</span>;
 }
 
 export function ServiceIcon({ icon, size = 36 }: { icon?: string | null; size?: number }) {
   const [imageFailed, setImageFailed] = useState(false);
-  const useImage = !!icon && isCustomImage(icon) && !imageFailed;
+  const useImage = isCustomImage(icon) && !imageFailed;
 
   const boxStyle: React.CSSProperties = {
     width: size,

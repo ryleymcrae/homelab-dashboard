@@ -62,10 +62,3 @@ display_hdmi_rotate=1   # 90 degrees; 0/1/2/3 for 0/90/180/270
 Edit `~/homelab-dashboard-kiosk.sh` (desktop-environment setup) or the
 `DASHBOARD_URL` environment variable in the systemd unit (headless
 setup), then restart the kiosk process.
-
-## Display preferences
-
-Auto-dim, dim delay, and screen timeout are configured from the
-dashboard's own Settings page (or `display:` in `config.yml`) rather
-than OS-level scripting, so they travel with your configuration and work
-the same way in kiosk mode or a regular browser tab.

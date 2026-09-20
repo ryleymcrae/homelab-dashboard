@@ -116,7 +116,7 @@ def test_docker_adapter_accepts_a2s_options():
     against Docker is covered by the unreachable-server test above and
     the live game servers themselves."""
     adapter = DockerAdapter(
-        "d1", "Test", container="x", socket_url="unix:///nonexistent",
+        "d1", "Test", container="x", endpoint="unix:///nonexistent",
         a2s_port=2457, a2s_address="127.0.0.1",
     )
     assert adapter.a2s_port == 2457

@@ -7,7 +7,7 @@ with the abstract ServiceAdapter/Service types.
 from __future__ import annotations
 
 from backend.adapters.base import ServiceAdapter
-from backend.adapters.docker_adapter import DockerAdapter
+from backend.adapters.docker_adapter import DockerAdapter, DockerEndpoint
 from backend.adapters.http_adapter import HttpAdapter
 from backend.adapters.prometheus_adapter import PrometheusAdapter
 from backend.adapters.systemd_adapter import SystemdAdapter
@@ -19,17 +19,22 @@ from backend.plugins.base import get_plugin_class
 from backend.plugins import examples_game_server  # noqa: F401
 
 
-def _service_id(cfg: ServiceConfig) -> str:
-    return cfg.name.lower().replace(" ", "-")
+def service_id(cfg: ServiceConfig) -> str:
+    return cfg.id
 
 
 def build_adapter(cfg: ServiceConfig, app_config: AppConfig) -> ServiceAdapter:
-    sid = _service_id(cfg)
+    sid = service_id(cfg)
 
     if cfg.type == "docker":
+        # Through the Docker API assigned to this service's host (Settings >
+        # Devices), so a remote host's containers are monitored and
+        # controlled there -- otherwise the local socket, as always.
+        conn = app_config.docker_connection_for(cfg.host)
+        endpoint = DockerEndpoint.from_connection(conn) if conn else DockerEndpoint(app_config.integrations.docker_socket)
         return DockerAdapter(
             sid, cfg.name, container=cfg.container,
-            socket_url=app_config.integrations.docker_socket, icon=cfg.icon, banner=cfg.banner,
+            endpoint=endpoint, icon=cfg.icon, banner=cfg.banner,
             status_url=cfg.status_url, a2s_port=cfg.a2s_port, a2s_address=cfg.a2s_address,
         )
     if cfg.type == "systemd":

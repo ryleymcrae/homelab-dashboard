@@ -75,8 +75,10 @@ type never requires frontend changes — only a new adapter that emits
    REST endpoints for initial page loads and a WebSocket broadcast loop
    that pushes a fresh snapshot to all connected clients every ~2 seconds.
 4. The broadcast loop also samples select metrics into
-   `backend/persistence/history.py` (SQLite) at a lower frequency, for
-   sparklines and the System/Network history charts. `GET
+   `backend/persistence/history.py` (SQLite) at a lower frequency
+   (`history.sample_interval_seconds`; `_record_history` in
+   `backend/api/main.py`), for
+   sparklines and the Devices/Network history charts. `GET
    /api/history/{series}` reads back through
    `DashboardProvider.get_history()` rather than that store directly --
    `LiveProvider` queries it, `DemoProvider` synthesizes a plausible
@@ -102,7 +104,7 @@ being assembled and served.
 ## Hosts
 
 Every entry under `hosts:` produces a `HostInfo` and is rendered with
-the exact same Home/System cards and Network entry — there is no
+the exact same Home/Devices cards and Network entry — there is no
 first-class "local host" special-cased anywhere above the collector
 layer. `backend/collectors/hosts.py` picks one of three collection
 strategies per host, all producing the same `HostInfo` shape:
@@ -125,6 +127,25 @@ aren't full hosts (switches, sensors, IoT gadgets).
 
 The header's overall status pill (`overallStatus` in the snapshot) is
 the worst status across every host, not just the local one.
+
+### Which host runs which service
+
+`Service.host` (a host's `name`, matching `HostConfig.name` -- not
+`HostInfo.id`, which is a server-computed slug) is what the Home page's
+default layout uses to consolidate a host's services into its own card
+(`frontend/src/pages/HomePage.tsx:servicesForHost`), rather than a
+separate flat services list -- generically, by matching the configured
+`host:` field, never by assuming which host "usually" runs a given
+service. No adapter (Docker/systemd/HTTP/TCP/Prometheus) sets this field
+itself -- each one only knows about the thing it's monitoring, not which
+`hosts:` entry it happens to run on -- so `LiveProvider.get_services()`/
+`get_service()` overlay it centrally from `ServiceConfig.host`, the one
+place this mapping is applied, the same "one factory/one overlay point"
+pattern used throughout this codebase. `DemoProvider`'s hand-written
+fixtures (`backend/demo/generator.py`) set it directly since there's no
+adapter layer to overlay onto. A service whose `host` doesn't match any
+configured host (unset, typo, or a host since renamed/removed) is never
+dropped -- it shows up in a separate "Other Services" section instead.
 
 ## The provider abstraction
 
@@ -163,7 +184,7 @@ throughput) live in a separate on-demand tier instead: `GET
 `Metric` list `Service` already used) rather than more fixed fields,
 since the set of "deep" metrics varies far more than the always-shown
 ones. The frontend only fetches this when a user expands "Detailed
-Metrics" on the System page — never as part of the live snapshot poll.
+Metrics" on the Devices page — never as part of the live snapshot poll.
 
 ## Logs as an adapter capability
 
@@ -237,7 +258,8 @@ An **empty** `widgets` list is the default and is handled specially:
 `HomePage.tsx` falls back to the exact pre-customization layout (one
 `HostCard` per host, then the full services grid) rather than rendering
 zero widgets — so a fresh install, or any install that never opens
-Layout settings, looks unchanged. Settings' `LayoutSettings` panel
+Layout settings, looks unchanged. Settings' Home Layout panel
+(`frontend/src/pages/settings/LayoutSettings.tsx`)
 manages this list (add/remove/reorder via up/down buttons — no
 drag-and-drop library was introduced, since a touch kiosk is this
 app's least forgiving input target and up/down arrows can't misfire the
@@ -257,6 +279,22 @@ destructiveness) from the service/host's actual declared actions, so a
 custom card's confirm dialog is never out of sync with what the action
 really does.
 
+How a host's CPU/Memory/Storage/Temperature are drawn is decided in one
+place, `dashboard.metric_display` (`MetricDisplaySettings`), and read
+through one module, `frontend/src/api/metrics.ts`: which styles each
+metric supports (mirroring the per-metric `Literal` types in
+`backend/config/schema.py`), the defaults, and `resolveMetricDisplay()`.
+The host tile row -- `HostMetricTiles`, shared by Home's `HostCard` and
+the Devices page instead of each building its own -- and Home's
+`host_metric` widgets both render through the same `HostMetricTile`. A
+widget's `display` can override the *style* for that one placement, never
+the color, so there aren't two places configuring "how CPU looks". Every
+tile is a button: it opens that host's Detailed Metrics on the Devices
+page (`/devices?host=<id>`). The snapshot carries each host's effective
+alert thresholds (`alertThresholds`, from
+`backend/alerting/evaluator.py:merge_thresholds`), so the temperature
+tile states the real limit rather than a hardcoded "hot" number.
+
 Theme customization (`accent_color`, `density` on `DashboardSettings`)
 is additive to the existing token system rather than a restructuring:
 `frontend/src/api/color.ts` derives the `--color-primary`/
@@ -270,6 +308,121 @@ bug surfaced: `main.tsx` hardcoded `data-theme="dark"` at boot and never
 synced from config; `App.tsx`'s `Shell` component now applies
 `data-theme`/`data-density`/accent color from the snapshot on every
 update instead.
+
+### History charts
+
+`frontend/src/charts/TimeSeriesChart.tsx` draws the Devices page's CPU &
+Memory chart and the Network page's traffic chart. It renders at the
+container's real pixel width (a stretched viewBox would distort the axis
+text), with a left value axis and an optional right one for a series in
+different units -- on the Devices page, CPU in % on the left and memory
+converted from its stored percentage to bytes of the host's RAM on the
+right, each labelled in its line's color (the Metric display colors).
+Time ticks come from `charts/timeAxis.ts`, rounded and aligned in the
+configured time zone (hourly on :00 local, daily on local midnight).
+Before drawing, each series is reduced to a min/max pair per couple of
+pixels, so a month of 30-second samples (~86k points) stays cheap on a Pi
+without averaging away the spikes. Tap or hover shows the exact values at
+that moment; the grid follows `dashboard.chart_grid`.
+
+### Time zone and temperature unit: render-time only
+
+`dashboard.timezone` and `dashboard.temperature_unit` never change what
+the backend stores or sends -- timestamps stay ISO/UTC and temperatures
+stay Celsius everywhere in the API, including alert messages and the
+`temp_c` thresholds. `frontend/src/api/format.ts` is the one place both
+are applied: App.tsx's `Shell` hands it the snapshot's preferences
+during render (before any page formats anything), and every timestamp
+and temperature on screen goes through its formatters -- the header
+clock, alert/job/backup/check-in times, log lines, host tiles, Home
+widgets. A temperature alert's message is re-rendered from its numeric
+`value`/`threshold` rather than shown as the backend's Celsius string.
+An unknown zone falls back to the browser's own instead of throwing.
+
+### Branding and uploaded images
+
+The logo, favicon, and nav tab icons (`dashboard.logo`/`favicon`/
+`nav_icons`) are ordinary icon references, the same value type every
+host/service icon already used: a glyph name, a URL, or a `/`-path.
+Uploads didn't change that -- `POST /api/assets` stores the file in
+`/data/assets` and returns `/api/assets/<content-hash>.<ext>`, which is
+just another path, so nothing that renders icons needed to learn about
+uploads. One picker (`frontend/src/components/IconPicker.tsx`) sets every
+icon field. `GET /api/assets` reports where each image is referenced by
+walking the config generically (`assets.references`), which is also what
+blocks deleting an image still in use -- including from fields added
+later. The favicon is set by App.tsx's `Shell` alongside theme and
+accent (a glyph is drawn into an SVG in the accent color), and the
+bottom nav's tab list (`NAV_TABS` in `BottomNav.tsx`) is the same list
+Settings > Branding offers icons for.
+
+## The Settings page
+
+`frontend/src/pages/SettingsPage.tsx` is a shell -- search, category nav,
+save queue -- around one component per category in
+`frontend/src/pages/settings/`. Three conventions every new setting
+follows:
+
+- **Every setting is registered.** `settings/registry.ts` lists each
+  category and each individual setting (`id`, label, synonyms), plus
+  entries generated from config for things the user created (hosts,
+  notifiers, connections, widgets). The search box ranks these, and the
+  section component renders a `SettingRow`/`SettingBlock` with the same
+  `id` as its scroll-and-highlight anchor. `frontend/tests/
+  settingsRegistry.test.tsx` renders every category and fails if an entry
+  has no matching anchor, so the two can't drift.
+- **Settings are addressable.** Category and setting live in the URL
+  (`#/settings?c=alerts&s=alerting.temp_c`, or just `?s=` -- the category
+  is looked up), so any page can link straight to the setting that
+  controls what it shows; the search box navigates the same way.
+- **Saves are queued, and list edits are computed late.** Every change is
+  still one `PATCH /api/config`, but they run one at a time, and an edit
+  to a list (widgets, notifiers, connections, hosts) passes a function of
+  the latest saved config rather than a precomputed list -- `PATCH`
+  replaces lists wholesale, so two quick edits to the same list would
+  otherwise have the second silently undo the first. Text/number fields
+  keep a local draft and save once on blur/Enter, since each `PATCH`
+  rewrites `config.yml` and rebuilds the provider.
+
+- **Edits that span config go through one module.** A host or service is
+  referenced elsewhere by `name` (a service's `host:`, the alert override
+  maps) and by its derived `id` (Home widgets), so renames and removals
+  are built by `settings/configEdits.ts` rather than inline: renaming a
+  host moves its services and override along, then a second save
+  re-points widgets at the new `id` -- read back from the saved config
+  (`HostConfig.id`/`ServiceConfig.id`, computed server-side by
+  `backend/config/schema.py:slug`), never re-derived in JS.
+
+Every `config.yml` field is editable here; the only thing that isn't is
+the password, which by design lives in the environment. Category
+placement follows what a setting is *about*: identity (General), look
+(Appearance), identity images and the upload library (Branding), the Home page (Home Layout), one machine (Devices --
+including which integration feeds it), one service (Services),
+thresholds, overrides, and notifiers (Alerts), network checks (Network),
+demo mode and data-source connections (Integrations), who can act
+(Access & Security), and version/stored history (About). A config field
+that nothing reads doesn't get a control -- it gets removed (the old
+`display:` section, `network.interface`, `health_check.interval_seconds`,
+`integrations.*_enabled`), so every control on the page does what it
+says.
+
+### Config writes: what "set" means
+
+`ConfigStore.update()` (`backend/config/loader.py`) merges a patch into
+the fields that were actually *set* -- loaded from `config.yml` or
+patched since -- not a full dump with defaults filled in, and writes
+back only those. Pydantic's `model_fields_set` is load-bearing here: an
+alert override replaces just the fields it names
+(`backend/alerting/evaluator.py:merge_thresholds`), so a full dump
+round-trip would pin every override's other fields to the built-in
+defaults on the first unrelated save. For the same reason nulls aren't
+blanket-dropped on write -- `temp_c: null` is how a threshold is turned
+off, and dropping it would quietly turn it back on after a restart --
+only nulls that restate a `None` default are. The override maps are
+also serialized as only-set-fields (`AlertingConfig._overrides_as_set`),
+so `GET /api/config` shows the UI which fields inherit, and are replaced
+whole rather than merged on `PATCH` so an override or one of its fields
+can actually be removed.
 
 ## Admin actions: audit log, simulated transitions, config/image state
 
@@ -373,7 +526,7 @@ stays empty for every real host.
 `GET /api/fleet` (`DashboardProvider.get_fleet_summary()`) aggregates
 totals across every host/service this provider knows about -- cores,
 memory, storage, containers running, power draw where available -- for
-the System page's fleet-wide overview card. Every total is `Optional` and
+the Devices page's fleet-wide overview card. Every total is `Optional` and
 omitted rather than fabricated when it can't be honestly computed (e.g.
 `total_power_draw_w` stays `null` for `LiveProvider` until a real
 power-sensing collector exists), the same "never fabricate" rule as
@@ -422,22 +575,89 @@ integration (Discord, ntfy, Pushover, generic webhook), selected by
 function maps a type string to a class" role `adapters/factory.py` and
 `providers/factory.py` both play. It's a *separate* abstraction from
 `DashboardProvider`, not a mode of it -- which notifiers exist is chosen
-by what the operator configured, not by `demo_mode`, so real Discord
-notifications (once implemented) should work identically whether the
-underlying alert came from real or demo data.
+by what the operator configured, not by `demo_mode`, so notifications
+go out identically whether the underlying alert came from real or demo
+data (a demo instance with a Discord notifier configured *will* post its
+simulated alerts).
 
-None of the four concrete notifiers call out to a real service yet --
-each one simulates a delay and a plausible outcome, and each class's
-docstring says exactly what the real HTTP call would look like (a
-Discord `{"content": ...}` POST, an ntfy plaintext POST with a Title
-header, a Pushover `api.pushover.net/1/messages.json` POST, a generic
-JSON webhook). Implementing one for real later is a change to that one
-class alone -- the evaluator, the API routes, and the Settings UI
-wouldn't need to change at all. Credentials are never in `config.yml`
-itself, only the name of an environment variable holding them
-(`docs/security.md`); a missing env var is reported back through the
-same `NotifyResult(success=False, ...)` shape as a simulated failure,
-not a crash.
+Each notifier makes one real HTTP request: a Discord webhook POST
+(`{"content": ...}` with `allowed_mentions` emptied, so a host named
+"@everyone" can't ping a server), an ntfy JSON publish to the server
+root, a Pushover `api.pushover.net/1/messages.json` POST, or a generic
+JSON webhook. Credentials are never in `config.yml` itself, only the
+name of an environment variable holding them (`docs/security.md`), read
+at send time; a missing variable, a refused request, or a network error
+comes back as `NotifyResult(success=False, ...)` with a specific reason
+-- never a crash, and never the webhook URL itself, since for Discord
+the URL *is* the credential.
+
+## Integrations: user-managed data source connections
+
+A separate, newer concept from `integrations.docker_socket`, which
+remains exactly what it was: the one always-available local Docker path
+(systemd likewise always means the local host). `integrations.connections`
+(`IntegrationConfig` in `backend/config/schema.py`) is instead a list of
+explicit, user-managed connections — primarily for reaching a *remote*
+host's data that those fixed flags can't: a remote host's own Docker API,
+a Prometheus server, a node_exporter/Glances endpoint, or a host reached
+over SSH. Managed entirely from Settings > Integrations (add/edit/remove/
+test), the same way `alerting.notifiers` is managed from Settings >
+Alerts.
+
+`backend/integrations/base.py` mirrors `backend/notifications/base.py`'s
+shape deliberately: one `Integration` ABC, one concrete class per `type`
+(`DockerApiIntegration`, `PrometheusIntegration`, `NodeExporterIntegration`,
+`SshIntegration`, `CustomScriptIntegration`), selected by
+`build_integration()`. Every `test_connection()` is a real check from
+the machine running the dashboard that changes nothing on the other end:
+the Docker API is pinged and asked for its version, Prometheus for its
+build info, a node_exporter/Glances URL is fetched and recognized by
+what it returns, SSH authenticates with the key and runs no command
+(`paramiko`), and a custom script is checked for existence and
+permissions but never executed. `POST /api/integrations/{id}/test` calls it and records the
+outcome; `GET /api/integrations` returns each connection's live status
+(`connected`/`error`/`not_configured`) plus its last successful check-in
+time, tracked in `backend/integrations/status.py` — deliberately
+in-memory only, not persisted, since it's derived/transient state, the
+same category as `docker_adapter.py`'s lazy `_client` singleton. The
+connections themselves (type, name, per-type fields) are read/written
+through the existing `GET`/`PATCH /api/config`, not a dedicated CRUD
+endpoint — same convention as widgets and notifiers.
+
+A host can optionally set `integration_id` (`HostConfig`, chosen per host
+under Settings > Devices) to one of these connections — validated at the
+`AppConfig` level (a `field_validator` on `integrations` with
+`validate_default=True`, so the check still runs even when
+`integrations:` itself is omitted) to ensure it references a connection
+that actually exists. `docker_api` is the type wired so far, resolved in
+one place (`AppConfig.docker_connection_for`) and supplying what Docker
+actually knows rather than replacing everything:
+
+- every `type: docker` service on that host is monitored and controlled
+  through that API instead of the local socket
+  (`backend/adapters/factory.py`), and container discovery for the host
+  lists its containers;
+- the host's Detailed Metrics add Docker's version, container counts,
+  images, OS, and kernel;
+- a host with **no agent** gets its status, CPU count, memory size, and
+  OS from `docker info` instead of a bare ping. A local or agent host
+  keeps those as its vitals source -- they measure usage, which Docker
+  can't -- and nothing Docker doesn't report is filled in.
+
+`backend/adapters/docker_adapter.py` keeps one client per endpoint
+(`DockerEndpoint`: URL plus optional TLS files), dropped and reconnected
+after a failed call. An assignment to any other type, or to a disabled
+connection, is saved but leaves the host on its default collection --
+Settings > Devices says which. A host or
+integration removed while still referenced by the other is rejected by
+this same validator, so `config.yml` can never end up with a dangling
+reference — the Settings UI surfaces that rejection as a dismissable
+error banner rather than silently discarding the change.
+
+Wiring the remaining types into host data (querying Prometheus or
+node_exporter for a host's vitals, SSH for host actions) is an addition
+to `backend/collectors/hosts.py` and `LiveProvider`, not an architectural
+change.
 
 ## Extensibility
 

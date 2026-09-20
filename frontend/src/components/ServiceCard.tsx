@@ -23,13 +23,10 @@ export function ServiceCard({ service, compact }: ServiceCardProps) {
   return (
     <Link
       to={`/services/${service.id}`}
-      className="card"
+      className="list-row"
       style={{
-        display: "flex",
         alignItems: "center",
         gap: 12,
-        textDecoration: "none",
-        color: "inherit",
         minHeight: compact ? 56 : 64,
       }}
     >

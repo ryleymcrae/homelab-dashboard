@@ -4,14 +4,19 @@ import type { Status } from "../api/types";
 import { StatusPill } from "./StatusPill";
 import { useAuth } from "../hooks/AuthContext";
 import { AdminLoginDialog } from "./AdminLoginDialog";
+import { IconGlyph } from "./ServiceIcon";
+import { isCustomImage } from "../api/icons";
+import { DEFAULT_LOGO_GLYPH } from "../api/favicon";
 
 interface HeaderProps {
   title: string;
+  /** dashboard.logo -- null keeps the built-in ▲. */
+  logo?: string | null;
   subtitle: string;
   overallStatus: Status;
 }
 
-export function Header({ title, subtitle, overallStatus }: HeaderProps) {
+export function Header({ title, logo, subtitle, overallStatus }: HeaderProps) {
   const [now, setNow] = useState(new Date());
   const { required, guestMode, isAdmin, logout } = useAuth();
   const [showLogin, setShowLogin] = useState(false);
@@ -46,9 +51,10 @@ export function Header({ title, subtitle, overallStatus }: HeaderProps) {
             justifyContent: "center",
             color: "var(--color-primary)",
             fontWeight: 700,
+            overflow: "hidden",
           }}
         >
-          ▲
+          <IconGlyph icon={logo} fallback={DEFAULT_LOGO_GLYPH} size={isCustomImage(logo) ? 28 : 16} />
         </div>
         <div>
           <div style={{ fontSize: "var(--text-base)", fontWeight: 700, lineHeight: 1.1 }}>{title}</div>

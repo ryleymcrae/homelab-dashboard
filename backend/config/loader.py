@@ -13,7 +13,7 @@ from pathlib import Path
 from threading import RLock
 
 import yaml
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from backend.config.schema import AppConfig
 
@@ -72,7 +72,12 @@ class ConfigStore:
         it in isolation, and only then atomically replace config.yml. Never
         leaves the file in a partially-written or invalid state."""
         with self._lock:
-            current = self._config.model_dump(mode="python")
+            # Only what was actually set, not a full dump: "set" is
+            # meaningful -- an alert override replaces just the fields it
+            # names (backend/alerting/evaluator.py:merge_thresholds), and
+            # a full dump would mark every default as set on the way back
+            # in, pinning each override to the built-in defaults.
+            current = self._config.model_dump(mode="python", exclude_unset=True)
             merged = _deep_merge(current, patch)
             try:
                 candidate = AppConfig.model_validate(merged)
@@ -84,11 +89,7 @@ class ConfigStore:
             )
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    yaml.safe_dump(
-                        candidate.model_dump(mode="json", exclude_none=True),
-                        f,
-                        sort_keys=False,
-                    )
+                    yaml.safe_dump(_to_yaml_data(candidate), f, sort_keys=False)
                 shutil.move(tmp_path, self.path)
             finally:
                 if os.path.exists(tmp_path):
@@ -98,11 +99,43 @@ class ConfigStore:
             return self._config
 
 
-def _deep_merge(base: dict, patch: dict) -> dict:
+def _to_yaml_data(value):
+    """What config.yml gets: the fields that were set, under their
+    config.yml names (`host_address`, not `tcp_host`), minus nulls that
+    only restate a None default. Nulls that *mean* something survive --
+    `temp_c: null` disables a threshold whose default is 70, which a
+    blanket exclude_none would silently undo on the next restart."""
+    if isinstance(value, BaseModel):
+        out = {}
+        for name, field in type(value).model_fields.items():
+            if name not in value.model_fields_set:
+                continue
+            v = getattr(value, name)
+            if v is None and field.default is None and field.default_factory is None:
+                continue
+            out[field.alias or name] = _to_yaml_data(v)
+        return out
+    if isinstance(value, list):
+        return [_to_yaml_data(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _to_yaml_data(v) for k, v in value.items()}
+    return value
+
+
+# Maps keyed by a user-chosen name, sent whole and replaced wholesale
+# rather than merged: merging can only ever add keys, so there'd be no
+# way to remove an override (or put one field back to "inherit"), or put
+# a nav tab back to its built-in icon -- and `null` can't mean "delete"
+# for an override, it already means "disabled".
+_REPLACE_ON_PATCH = {("alerting", "host_overrides"), ("alerting", "service_overrides"), ("dashboard", "nav_icons")}
+
+
+def _deep_merge(base: dict, patch: dict, path: tuple[str, ...] = ()) -> dict:
     result = dict(base)
     for key, value in patch.items():
-        if isinstance(value, dict) and isinstance(result.get(key), dict):
-            result[key] = _deep_merge(result[key], value)
+        here = (*path, key)
+        if isinstance(value, dict) and isinstance(result.get(key), dict) and here not in _REPLACE_ON_PATCH:
+            result[key] = _deep_merge(result[key], value, here)
         else:
             result[key] = value
     return result

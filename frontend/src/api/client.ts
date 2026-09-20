@@ -1,9 +1,11 @@
 import type {
   Alert,
+  AssetInfo,
   BackupStatus,
   ContainerConfig,
   FleetSummary,
   HostInfo,
+  IntegrationStatusEntry,
   LogLine,
   Metric,
   NetworkSnapshot,
@@ -36,6 +38,28 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** FastAPI's `{"detail": ...}` as a readable message (and, for a 409 on
+ * an image still in use, where it's used). */
+export class ApiError extends Error {
+  constructor(message: string, public status: number, public usedBy: string[] = []) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+async function assetRequest<T>(path: string, init: RequestInit): Promise<T> {
+  // No Content-Type here: a FormData body sets its own multipart boundary.
+  const res = await fetch(path, { credentials: "same-origin", ...init });
+  if (res.status === 401) throw new AuthRequiredError();
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const detail = body?.detail;
+    const message = typeof detail === "string" ? detail : detail?.message ?? `${res.status} ${res.statusText}`;
+    throw new ApiError(message, res.status, detail?.usedBy ?? []);
+  }
+  return res.json() as Promise<T>;
+}
+
 export const api = {
   getSnapshot: () => request<Snapshot>("/api/snapshot"),
   getHosts: () => request<HostInfo[]>("/api/hosts"),
@@ -59,7 +83,9 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(patch),
     }),
-  discoverDocker: () => request<Record<string, unknown>[]>("/api/discovery/docker"),
+  /** Containers on `host`'s Docker (its assigned Docker API, else the local socket). */
+  discoverDocker: (host?: string | null) =>
+    request<Record<string, unknown>[]>(host ? `/api/discovery/docker?host=${encodeURIComponent(host)}` : "/api/discovery/docker"),
   getHostDetail: (id: string) => request<{ metrics: Metric[] }>(`/api/hosts/${id}/detail`),
   getServiceLogs: (id: string, lines = 200) =>
     request<{ lines: LogLine[] }>(`/api/services/${id}/logs?lines=${lines}`),
@@ -77,6 +103,18 @@ export const api = {
     request<Alert>(`/api/alerts/${id}/snooze`, { method: "POST", body: JSON.stringify({ minutes }) }),
   testNotifier: (id: string) =>
     request<{ success: boolean; message: string }>(`/api/notifiers/${id}/test`, { method: "POST" }),
+  getIntegrationStatus: () => request<IntegrationStatusEntry[]>("/api/integrations"),
+  testIntegration: (id: string) =>
+    request<{ success: boolean; message: string } & IntegrationStatusEntry>(`/api/integrations/${id}/test`, {
+      method: "POST",
+    }),
+  listAssets: () => request<AssetInfo[]>("/api/assets"),
+  uploadAsset: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return assetRequest<{ name: string; url: string }>("/api/assets", { method: "POST", body: form });
+  },
+  deleteAsset: (name: string) => assetRequest<{ ok: boolean }>(`/api/assets/${encodeURIComponent(name)}`, { method: "DELETE" }),
   getAuthStatus: () =>
     request<{ required: boolean; authenticated: boolean; guestMode: boolean; isAdmin: boolean }>("/api/auth/status"),
   login: (password: string) =>

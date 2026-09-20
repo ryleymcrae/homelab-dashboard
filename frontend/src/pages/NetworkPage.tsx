@@ -2,6 +2,8 @@ import React, { useEffect, useState } from "react";
 import { useSnapshot } from "../hooks/SnapshotContext";
 import { api } from "../api/client";
 import { TimeSeriesChart } from "../charts/TimeSeriesChart";
+import { niceMax } from "../charts/timeAxis";
+import { useChartGrid } from "../hooks/useChartGrid";
 import { StatusPill } from "../components/StatusPill";
 import { ServiceIcon } from "../components/ServiceIcon";
 import { formatBytes } from "../api/format";
@@ -10,6 +12,7 @@ export function NetworkPage() {
   const { snapshot } = useSnapshot();
   const [downHistory, setDownHistory] = useState<{ ts: number; value: number }[]>([]);
   const [upHistory, setUpHistory] = useState<{ ts: number; value: number }[]>([]);
+  const [chartGrid, setChartGrid] = useChartGrid();
 
   useEffect(() => {
     const load = async () => {
@@ -35,7 +38,9 @@ export function NetworkPage() {
   const internet = network.targets.find((t) => t.kind === "internet");
   const gateway = network.targets.find((t) => t.kind === "gateway");
   const rest = network.targets.filter((t) => t.kind !== "internet" && t.kind !== "gateway");
-  const maxMbps = Math.max(100, ...downHistory.map((p) => p.value), ...upHistory.map((p) => p.value));
+  let peakMbps = 0;
+  for (const p of [...downHistory, ...upHistory]) peakMbps = Math.max(peakMbps, p.value);
+  const maxMbps = niceMax(Math.max(10, peakMbps));
 
   return (
     <div className="page">
@@ -102,7 +107,9 @@ export function NetworkPage() {
           </div>
         </div>
         <TimeSeriesChart
-          yMax={maxMbps}
+          grid={chartGrid}
+          onGridChange={setChartGrid}
+          left={{ max: maxMbps, format: (v) => `${Math.round(v)} Mbps` }}
           series={[
             { name: "Download", color: "var(--chart-line-1)", points: downHistory },
             { name: "Upload", color: "var(--chart-line-2)", points: upHistory },

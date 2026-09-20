@@ -16,15 +16,19 @@ import logging
 import time
 
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend import auth
-from backend.adapters.docker_adapter import list_discoverable_containers
-from backend.alerting.evaluator import AlertEvaluator
+from backend.adapters.docker_adapter import DockerEndpoint, list_discoverable_containers
+from backend.alerting.evaluator import AlertEvaluator, merge_thresholds
 from backend.config.loader import ConfigError, ConfigStore
+from backend.integrations import status as integration_status
+from backend.integrations.base import build_integration
 from backend.models.core import HostInfo, Status
 from backend.notifications.base import build_notifier
 from backend.persistence.alerts import AlertStore
+from backend.persistence.assets import CONTENT_TYPES, MAX_BYTES, URL_PREFIX, AssetError, AssetStore, AssetTooLarge, references
 from backend.persistence.audit import AuditLogStore
 from backend.persistence.history import HistoryStore
 from backend.providers.base import ActionError, ConfigUnsupportedError, LogsError, LogsUnsupportedError, NotFoundError
@@ -43,6 +47,7 @@ history = HistoryStore(
     max_rows_per_series=config_store.config.history.max_rows_per_series,
 )
 audit_log = AuditLogStore()
+asset_store = AssetStore()
 alert_store = AlertStore()
 alert_evaluator = AlertEvaluator(alert_store)
 provider = select_provider(config_store, history)
@@ -171,6 +176,20 @@ async def _network_snapshot() -> dict:
     }
 
 
+def _alert_thresholds(hosts: list[HostInfo]) -> dict:
+    """Each host's effective resource thresholds (defaults + its override),
+    so a tile can say "alert at 70°C" instead of guessing. Empty when
+    alerting is off -- a limit nothing acts on shouldn't be shown as one."""
+    alerting = config_store.config.alerting
+    if not alerting.enabled:
+        return {}
+    out = {}
+    for h in hosts:
+        t = merge_thresholds(alerting.defaults, alerting.host_overrides.get(h.name))
+        out[h.id] = {"cpuPercent": t.cpu_percent, "memPercent": t.mem_percent, "diskPercent": t.disk_percent, "tempC": t.temp_c}
+    return out
+
+
 async def _full_snapshot() -> dict:
     hosts, services, network = await asyncio.gather(
         _hosts_snapshot(), _services_snapshot(), _network_snapshot()
@@ -186,7 +205,15 @@ async def _full_snapshot() -> dict:
             "theme": config_store.config.dashboard.theme,
             "accentColor": config_store.config.dashboard.accent_color,
             "density": config_store.config.dashboard.density,
+            "timezone": config_store.config.dashboard.timezone,
+            "temperatureUnit": config_store.config.dashboard.temperature_unit,
+            "metricDisplay": config_store.config.dashboard.metric_display.model_dump(),
+            "logo": config_store.config.dashboard.logo,
+            "favicon": config_store.config.dashboard.favicon,
+            "navIcons": config_store.config.dashboard.nav_icons,
+            "chartGrid": config_store.config.dashboard.chart_grid,
         },
+        "alertThresholds": _alert_thresholds(hosts),
         "alertsActive": alert_store.count_active(),
         "timestamp": int(time.time()),
     }
@@ -388,6 +415,41 @@ async def test_notifier(notifier_id: str, request: Request):
     return {"success": result.success, "message": result.message}
 
 
+def _integration_state_dict(integration_id: str) -> dict:
+    state = integration_status.get(integration_id)
+    return {
+        "id": integration_id,
+        "status": state.status,
+        "message": state.message,
+        "lastCheckedAt": state.last_checked_at,
+        "lastSuccessAt": state.last_success_at,
+    }
+
+
+@app.get("/api/integrations")
+async def list_integration_status():
+    """Live status only -- the connections themselves (type, name, and
+    per-type fields) are read/written through GET/PATCH /api/config, the
+    same as widgets and notifiers. This just answers "is it working"."""
+    return [_integration_state_dict(c.id) for c in config_store.config.integrations.connections]
+
+
+@app.post("/api/integrations/{integration_id}/test")
+async def test_integration(integration_id: str, request: Request):
+    config = next((c for c in config_store.config.integrations.connections if c.id == integration_id), None)
+    if config is None:
+        raise HTTPException(404, "Integration not found")
+    actor = _actor(request)
+    integration = build_integration(config)
+    result = await integration.test_connection()
+    integration_status.record_test(integration_id, result.success, result.message)
+    audit_log.record(
+        actor, "integration_test", f"integration:{integration_id}",
+        "success" if result.success else "failed", result.message,
+    )
+    return {"success": result.success, "message": result.message, **_integration_state_dict(integration_id)}
+
+
 @app.get("/api/services/{service_id}/logs")
 async def service_logs(service_id: str, lines: int = 200):
     try:
@@ -452,10 +514,86 @@ async def fleet_summary():
 
 
 @app.get("/api/discovery/docker")
-async def discover_docker():
+async def discover_docker(host: str | None = None):
     """List discoverable containers for the setup UI. Discovery only --
-    never auto-adds anything to the dashboard (spec section 20)."""
-    return list_discoverable_containers(config_store.config.integrations.docker_socket)
+    never auto-adds anything to the dashboard (spec section 20). With
+    `host`, lists that host's containers -- through its assigned Docker
+    API if it has one, the same Docker its services would use."""
+    conn = config_store.config.docker_connection_for(host)
+    endpoint = DockerEndpoint.from_connection(conn) if conn else DockerEndpoint(config_store.config.integrations.docker_socket)
+    return await asyncio.to_thread(list_discoverable_containers, endpoint)
+
+
+# --------------------------------------------------------------------------
+# Uploaded images (logo, favicon, icons, banners) -- backend/persistence/assets.py.
+# Referenced from config.yml by URL; POST/DELETE are mutating, so the auth
+# and guest-mode gates in _auth_gate cover them like any other admin action.
+# --------------------------------------------------------------------------
+
+# Multipart framing around a MAX_BYTES file stays well under this.
+_UPLOAD_OVERHEAD_BYTES = 64 * 1024
+
+
+@app.get("/api/assets")
+async def list_assets():
+    dump = config_store.config.model_dump(mode="json")
+    return [{**a, "usedBy": references(dump, a["url"])} for a in asset_store.list()]
+
+
+@app.post("/api/assets", status_code=201)
+async def upload_asset(request: Request):
+    # Checked before the body is parsed: the multipart parser would
+    # otherwise spool an arbitrarily large upload to disk first, and this
+    # port is reachable without nginx's own body limit in front of it.
+    length = request.headers.get("content-length")
+    if length is None:
+        raise HTTPException(411, "Uploads need a Content-Length.")
+    if int(length) > MAX_BYTES + _UPLOAD_OVERHEAD_BYTES:
+        raise HTTPException(413, f"Images can be at most {MAX_BYTES // (1024 * 1024)} MB.")
+    form = await request.form()
+    upload = form.get("file")
+    if upload is None or isinstance(upload, str):
+        raise HTTPException(400, "Expected a `file` field.")
+    data = await upload.read(MAX_BYTES + 1)
+    actor = _actor(request)
+    try:
+        name = asset_store.save(data)
+    except AssetTooLarge as exc:
+        raise HTTPException(413, str(exc)) from exc
+    except AssetError as exc:
+        audit_log.record(actor, "asset_upload", upload.filename or "", "rejected", str(exc))
+        raise HTTPException(415, str(exc)) from exc
+    audit_log.record(actor, "asset_upload", name, "success", upload.filename or "")
+    return {"name": name, "url": URL_PREFIX + name}
+
+
+@app.get("/api/assets/{name}")
+async def get_asset(name: str):
+    path = asset_store.path(name)
+    if path is None:
+        raise HTTPException(404, "No such image")
+    return FileResponse(
+        path,
+        media_type=CONTENT_TYPES[path.suffix[1:]],
+        headers={
+            # Content-addressed: these bytes can never change under this name.
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'",
+        },
+    )
+
+
+@app.delete("/api/assets/{name}")
+async def delete_asset(name: str, request: Request):
+    if asset_store.path(name) is None:
+        raise HTTPException(404, "No such image")
+    used_by = references(config_store.config.model_dump(mode="json"), URL_PREFIX + name)
+    if used_by:
+        raise HTTPException(409, {"message": "This image is still in use.", "usedBy": used_by})
+    asset_store.delete(name)
+    audit_log.record(_actor(request), "asset_delete", name, "success")
+    return {"ok": True}
 
 
 @app.get("/api/config")
@@ -464,12 +602,21 @@ async def get_config():
 
 
 @app.patch("/api/config")
-async def patch_config(patch: dict):
+async def patch_config(patch: dict, request: Request):
     global provider
+    # Trusted IPs decide who skips the login screen. Once a password
+    # exists, only someone who actually used it may change that list --
+    # otherwise a trusted kiosk could quietly add any other machine.
+    if "auth" in patch and auth.auth_enabled() and not auth.is_admin(_session_token(request)):
+        raise HTTPException(403, "Changing trusted IPs requires logging in with the dashboard password.")
     try:
         config_store.update(patch)
     except ConfigError as exc:
         raise HTTPException(400, str(exc)) from exc
+    # HistoryStore is built once at startup; keep its limits in step with
+    # config so a retention change applies now, not after a restart.
+    history.retention_days = config_store.config.history.retention_days
+    history.max_rows_per_series = config_store.config.history.max_rows_per_series
     # Rebuilding rather than mutating in place also covers demo_mode being
     # flipped at runtime -- the provider itself, not just its adapters,
     # may need to change.
@@ -578,11 +725,34 @@ async def ws_endpoint(websocket: WebSocket):
         _ws_clients.discard(websocket)
 
 
+def _record_history(data: dict) -> None:
+    """One history sample from a snapshot. Called every
+    `history.sample_interval_seconds`, not every broadcast tick -- with a
+    2-second tick, the per-series row cap would otherwise cover about a
+    day of history no matter what `retention_days` says."""
+    metrics_to_record = {}
+    for host_data in data["hosts"]:
+        if host_data.get("cpuPercent") is not None:
+            metrics_to_record[f"host.{host_data['id']}.cpu"] = host_data["cpuPercent"]
+            metrics_to_record[f"host.{host_data['id']}.mem"] = host_data.get("memPercent") or 0
+    if metrics_to_record:
+        history.record_many(metrics_to_record)
+    traffic = data.get("network", {}).get("traffic", {})
+    if traffic:
+        history.record_many(
+            {
+                "network.download_mbps": traffic.get("downloadMbps", 0),
+                "network.upload_mbps": traffic.get("uploadMbps", 0),
+            }
+        )
+
+
 async def _broadcast_loop():
     """Pushes a fresh snapshot to all connected clients on a cadence that
     balances responsiveness against load on low-powered hardware (spec
     section 23). Also samples history and runs periodic retention cleanup."""
     last_cleanup = 0.0
+    last_sample = 0.0
     while True:
         try:
             data = await _full_snapshot()
@@ -596,23 +766,10 @@ async def _broadcast_loop():
             for ws in dead:
                 _ws_clients.discard(ws)
 
-            metrics_to_record = {}
-            for host_data in data["hosts"]:
-                if host_data.get("cpuPercent") is not None:
-                    metrics_to_record[f"host.{host_data['id']}.cpu"] = host_data["cpuPercent"]
-                    metrics_to_record[f"host.{host_data['id']}.mem"] = host_data.get("memPercent") or 0
-            if metrics_to_record:
-                history.record_many(metrics_to_record)
-            traffic = data.get("network", {}).get("traffic", {})
-            if traffic:
-                history.record_many(
-                    {
-                        "network.download_mbps": traffic.get("downloadMbps", 0),
-                        "network.upload_mbps": traffic.get("uploadMbps", 0),
-                    }
-                )
-
             now = time.time()
+            if now - last_sample >= config_store.config.history.sample_interval_seconds:
+                _record_history(data)
+                last_sample = now
             if now - last_cleanup > 3600:
                 history.cleanup()
                 last_cleanup = now

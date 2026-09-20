@@ -8,3 +8,4 @@ docker==7.1.0
 websockets==13.1
 python-multipart==0.0.9
 python-a2s==1.4.2
+paramiko==3.5.0

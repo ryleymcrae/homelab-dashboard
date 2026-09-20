@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
+import { formatLogTimestamp } from "../api/format";
 import type { LogLine } from "../api/types";
 import { Modal } from "./Modal";
 
@@ -197,7 +198,7 @@ export function LogsDialog({ serviceId, serviceName, onClose }: { serviceId: str
         {!error &&
           lines.map((line, i) => (
             <div key={i}>
-              {line.ts && <span style={{ color: "var(--color-text-faint)" }}>{line.ts} </span>}
+              {line.ts && <span style={{ color: "var(--color-text-faint)" }}>{formatLogTimestamp(line.ts)} </span>}
               {line.text}
             </div>
           ))}

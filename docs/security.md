@@ -36,7 +36,9 @@ HMAC-signed with a key derived from the password itself (see
 every existing session with no separate secret to rotate or leak.
 
 Treat `trusted_ips` the same way you'd treat an unauthenticated admin
-port: never list a broad range there, and remember that anything on the
+port: never list a broad range there (a match-everything `0.0.0.0/0` or
+`::/0` is rejected outright, and every entry must parse as an address or
+range), and remember that anything on the
 listed IP (or able to spoof it on your LAN) gets full access, including
 start/stop/restart actions. `X-Forwarded-For` is only trusted because
 the shipped `deploy/nginx.conf` is the sole thing that can reach the
@@ -44,6 +46,15 @@ backend container on the internal Docker network and sets it — if you
 put another reverse proxy in front instead, make sure *it* also
 overwrites (not appends to) that header, or trusted-IP matching can be
 spoofed by any client.
+
+The list is editable from Settings → Access & Security, but once a
+password is set, `PATCH /api/config` refuses any change to `auth` unless
+the request carries a real password login (`backend/auth.py:is_admin()`,
+checked in `patch_config` in `backend/api/main.py`). Without that, a
+client on a trusted IP -- which otherwise has full access -- could
+quietly add some other machine to the list and keep passwordless access
+from it. With no password set the list has no effect yet, so it's
+editable freely.
 
 This covers authentication (who can act at all), not fine-grained
 authorization — there remain no user roles or per-service permissions;
@@ -73,7 +84,9 @@ also set a password would be worse than no toggle at all. Recovering
 from that state requires either setting `DASHBOARD_PASSWORD` and logging
 in, or editing `config.yml` directly to set `guest_mode: false` — the UI
 has no self-service escape hatch for a config that has locked itself out
-of the UI, by design.
+of the UI, by design. What the UI does do is ask for confirmation before
+turning guest mode on (Settings → Access & Security), with the lockout
+spelled out when no password is set.
 
 Like `trusted_ips`, this is enforced in the backend middleware
 (`_auth_gate` in `backend/api/main.py`), not just hidden in the
@@ -91,6 +104,44 @@ thing actually available: the client IP plus how it authenticated (e.g.
 `trusted:192.168.1.50`, `session:192.168.1.20`). This is meant to survive
 a move to real multi-user accounts later without a schema change -- see
 `docs/architecture.md`.
+
+## Image uploads
+
+`POST /api/assets` is the one endpoint that writes user-supplied bytes to
+disk (`backend/persistence/assets.py`), so it's deliberately narrow:
+
+- The file's type is decided from its own leading bytes, never its name
+  or the declared Content-Type — only PNG, JPEG, GIF, WebP, and ICO are
+  accepted. **SVG is refused**: an SVG served from the dashboard's own
+  origin can carry script. A script or HTML file renamed `logo.png` is
+  refused the same way.
+- The stored name is derived from the content hash; the client never
+  chooses a filename or path, and `GET /api/assets/<name>` only serves
+  names matching that exact pattern, so there's nothing to traverse.
+  Files are written via temp file + rename, like `config.yml`.
+- 2 MB per file, checked from `Content-Length` before the multipart body
+  is parsed (the backend's port can be reachable without nginx's own
+  limit in front of it); the shipped `deploy/nginx.conf` allows 3 MB on
+  `/api/` since nginx's 1 MB default would refuse uploads first. A
+  separately managed nginx needs the same `client_max_body_size`.
+- Served with `X-Content-Type-Options: nosniff` and a `default-src
+  'none'` Content-Security-Policy, so a browser won't reinterpret one as
+  anything but an image.
+- Upload and delete are mutating requests: covered by the auth gate and
+  guest mode like every other admin action, and recorded in the audit log
+  (`asset_upload`/`asset_delete`), including rejected uploads.
+
+## Connection tests and notifications
+
+Settings' "Test Connection" and notifier "Send Test" reach out from the
+backend for real. Neither is a way to run anything elsewhere: an SSH
+test authenticates with the configured key and runs no command, a
+custom script is checked for permissions but never executed, and HTTP
+checks are plain GETs. SSH refuses a host key that contradicts
+`known_hosts` and reports — rather than trusts — one it hasn't seen.
+Notifier secrets are read from the environment at send time and kept
+out of every result message and log line; a Discord webhook URL is
+redacted even from network-error text, since the URL is the credential.
 
 ## No arbitrary execution surface
 
@@ -138,6 +189,26 @@ behalf. If a plugin or Prometheus query needs a credential, keep it out
 of `config.yml`'s version-controlled parts (e.g. use environment
 variables and reference them from your own plugin code) — do not commit
 secrets to your fork/repo.
+
+Two concrete conventions this codebase follows for its own config:
+
+- **Single-value secrets** (webhook URLs, API tokens — e.g.
+  `NotifierConfig.url_env`/`pushover_api_token_env`) are referenced by
+  the *name* of an environment variable, never by value, in
+  `config.yml`.
+- **File-based credentials** (an integration's SSH private key, a Docker
+  TLS client cert/key — `IntegrationConfig.ssh_key_path`/
+  `docker_tls_cert_path`/`docker_tls_key_path`/`docker_tls_ca_path`, see
+  `docs/configuration.md`) extend the same principle to secrets that are
+  inherently files: `config.yml` stores only an absolute filesystem
+  path, never file content. The key/cert file must already exist on
+  disk, readable by the backend's service user (`chmod 600`, owned by
+  that user), and kept outside `config.yml`/version control — the same
+  trust boundary as any SSH key you'd manage by hand.
+
+Both conventions exist for the same reason: `config.yml` is meant to be
+safe to share, diff, or version-control on its own, and neither a
+credential's value nor its file content should ever end up in it.
 
 ## Reporting a vulnerability
 

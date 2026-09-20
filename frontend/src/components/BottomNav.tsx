@@ -1,19 +1,25 @@
 import React from "react";
 import { NavLink } from "react-router-dom";
 import { useSnapshot } from "../hooks/SnapshotContext";
+import { IconGlyph } from "./ServiceIcon";
+import type { NavTab } from "../api/types";
 
-const TABS = [
-  { to: "/", label: "Home", icon: "⌂" },
-  { to: "/services", label: "Services", icon: "▤" },
-  { to: "/network", label: "Network", icon: "◈" },
-  { to: "/system", label: "System", icon: "▣" },
-  { to: "/alerts", label: "Alerts", icon: "⚠" },
-  { to: "/settings", label: "Settings", icon: "⚙" },
+/** Every tab, in order -- also what Settings > Branding lists, so the
+ * two can't disagree. `key` is dashboard.nav_icons' key; `glyph` is the
+ * built-in icon shown until one is set. */
+export const NAV_TABS: { key: NavTab; to: string; label: string; glyph: string }[] = [
+  { key: "home", to: "/", label: "Home", glyph: "⌂" },
+  { key: "services", to: "/services", label: "Services", glyph: "▤" },
+  { key: "network", to: "/network", label: "Network", glyph: "◈" },
+  { key: "devices", to: "/devices", label: "Devices", glyph: "▣" },
+  { key: "alerts", to: "/alerts", label: "Alerts", glyph: "⚠" },
+  { key: "settings", to: "/settings", label: "Settings", glyph: "⚙" },
 ];
 
 export function BottomNav() {
   const { snapshot } = useSnapshot();
   const alertsActive = snapshot?.alertsActive ?? 0;
+  const icons = snapshot?.dashboard.navIcons ?? {};
 
   return (
     <nav
@@ -24,7 +30,7 @@ export function BottomNav() {
         flexShrink: 0,
       }}
     >
-      {TABS.map((tab) => (
+      {NAV_TABS.map((tab) => (
         <NavLink
           key={tab.to}
           to={tab.to}
@@ -46,7 +52,7 @@ export function BottomNav() {
           })}
         >
           <span style={{ position: "relative", fontSize: 16, lineHeight: 1 }}>
-            {tab.icon}
+            <IconGlyph icon={icons[tab.key]} fallback={tab.glyph} size={18} />
             {tab.to === "/alerts" && alertsActive > 0 && (
               <span
                 aria-label={`${alertsActive} active alerts`}

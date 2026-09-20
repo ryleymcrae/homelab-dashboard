@@ -33,9 +33,11 @@ export function Gauge({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
-      <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", fontWeight: 600 }}>
-        {label}
-      </div>
+      {label && (
+        <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", fontWeight: 600 }}>
+          {label}
+        </div>
+      )}
       <div style={{ position: "relative", width: size, height: size }}>
         <svg
           width={size}

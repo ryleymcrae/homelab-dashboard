@@ -5,8 +5,8 @@ import type { FleetSummary } from "../api/types";
 
 function FleetStatTile({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="card">
-      <div className="section-title">{label}</div>
+    <div className="tile">
+      <div className="section-title" style={{ marginBottom: 0 }}>{label}</div>
       <div style={{ fontSize: "var(--text-xl)", fontWeight: 700 }}>{value}</div>
       {sub && <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>{sub}</div>}
     </div>
@@ -38,9 +38,9 @@ export function FleetOverview() {
   if (!summary) return null;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
+    <div className="card">
       <div className="section-title">FLEET OVERVIEW</div>
-      <div className="grid grid-4">
+      <div className="tile-row">
         <FleetStatTile label="HOSTS ONLINE" value={`${summary.onlineHosts} / ${summary.totalHosts}`} />
         <FleetStatTile label="TOTAL CORES" value={summary.totalCores != null ? String(summary.totalCores) : "—"} />
         <FleetStatTile

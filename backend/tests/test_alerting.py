@@ -6,7 +6,7 @@ evaluator doesn't (and shouldn't) care where they came from.
 """
 import pytest
 
-from backend.alerting.evaluator import AlertEvaluator, _merge_thresholds
+from backend.alerting.evaluator import AlertEvaluator, merge_thresholds
 from backend.config.schema import AlertingConfig, ThresholdConfig
 from backend.models.core import Action, ActionKind, HostAction, HostActionKind, HostInfo, Service, Status
 from backend.persistence.alerts import AlertStore
@@ -91,15 +91,15 @@ def test_disabled_alerting_never_triggers_anything(evaluator):
 
 # -- threshold merging -------------------------------------------------------
 
-def test_merge_thresholds_none_override_returns_default_unchanged():
+def testmerge_thresholds_none_override_returns_default_unchanged():
     default = ThresholdConfig()
-    assert _merge_thresholds(default, None) is default
+    assert merge_thresholds(default, None) is default
 
 
-def test_merge_thresholds_only_overrides_explicitly_set_fields():
+def testmerge_thresholds_only_overrides_explicitly_set_fields():
     default = ThresholdConfig(cpu_percent=95.0)  # a customized global default
     override = ThresholdConfig(offline_minutes=10.0)  # only sets one field
-    merged = _merge_thresholds(default, override)
+    merged = merge_thresholds(default, override)
     assert merged.cpu_percent == 95.0  # inherited, not clobbered by ThresholdConfig's class default of 90
     assert merged.offline_minutes == 10.0
 

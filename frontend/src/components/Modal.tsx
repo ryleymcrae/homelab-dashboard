@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 
 interface ModalProps {
   children: React.ReactNode;
@@ -22,6 +22,21 @@ const SIZE_STYLES: Record<NonNullable<ModalProps["size"]>, React.CSSProperties> 
  * and behave identically instead of each reinventing the overlay.
  */
 export function Modal({ children, onClose, size = "confirm" }: ModalProps) {
+  const card = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
+  // Escape closes from anywhere, not only while focus happens to be on
+  // the overlay; and focus moves into the dialog (unless something in it,
+  // like a typed-confirmation field, already took it) so keyboard and
+  // screen-reader users land where the dialog is.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && closeRef.current();
+    document.addEventListener("keydown", onKey);
+    if (!card.current?.contains(document.activeElement)) card.current?.focus();
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
     <div
       role="dialog"
@@ -37,11 +52,12 @@ export function Modal({ children, onClose, size = "confirm" }: ModalProps) {
         padding: "var(--space-4)",
       }}
       onClick={onClose}
-      onKeyDown={(e) => e.key === "Escape" && onClose()}
     >
       <div
+        ref={card}
+        tabIndex={-1}
         className="card"
-        style={{ boxShadow: "var(--shadow-modal)", ...SIZE_STYLES[size] }}
+        style={{ boxShadow: "var(--shadow-modal)", outline: "none", ...SIZE_STYLES[size] }}
         onClick={(e) => e.stopPropagation()}
       >
         {children}

@@ -147,7 +147,13 @@ run sudo cp -a "$FRONTEND_INSTALL_DIR" "$BACKUP_DIR/frontend"
 echo "==> Checking for backend dependency changes"
 if ! sudo diff -q backend/requirements.txt "$INSTALL_DIR/backend/requirements.txt" >/dev/null 2>&1; then
   echo "    requirements.txt changed -- reinstalling into the venv"
-  run sudo -u "$SERVICE_USER" "$INSTALL_DIR/.venv/bin/pip" install -r backend/requirements.txt
+  # Via a world-readable temp copy: the service user usually can't read a
+  # repo under someone's home directory (e.g. /home/you is 0700).
+  REQS=$(mktemp)
+  cp backend/requirements.txt "$REQS"
+  chmod 644 "$REQS"
+  run sudo -u "$SERVICE_USER" "$INSTALL_DIR/.venv/bin/pip" install -r "$REQS"
+  rm -f "$REQS"
 else
   echo "    unchanged -- skipping pip install"
 fi

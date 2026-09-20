@@ -20,6 +20,7 @@ def _make_client(monkeypatch, tmp, *, password=None, trusted_ips=None, guest_mod
     monkeypatch.setenv("DASHBOARD_HISTORY_DB", str(Path(tmp) / "history.sqlite3"))
     monkeypatch.setenv("DASHBOARD_AUDIT_DB", str(Path(tmp) / "audit.sqlite3"))
     monkeypatch.setenv("DASHBOARD_ALERTS_DB", str(Path(tmp) / "alerts.sqlite3"))
+    monkeypatch.setenv("DASHBOARD_ASSETS_DIR", str(Path(tmp) / "assets"))
     if password is None:
         monkeypatch.delenv("DASHBOARD_PASSWORD", raising=False)
     else:
@@ -155,3 +156,28 @@ def test_guest_mode_login_and_logout_remain_reachable(monkeypatch):
             assert client.post("/api/auth/login", json={"password": "wrong"}, headers=headers).status_code == 401
             client.post("/api/auth/login", json={"password": "hunter2"}, headers=headers)
             assert client.post("/api/auth/logout", headers=headers).status_code == 200
+
+
+def test_trusted_ip_cannot_change_trusted_ips_once_a_password_exists(monkeypatch):
+    # A kiosk on a trusted IP can use everything, but adding *other*
+    # machines to the login bypass takes the actual password.
+    with tempfile.TemporaryDirectory() as tmp:
+        client = _make_client(monkeypatch, tmp, password="hunter2", trusted_ips=["127.0.0.1"])
+        with client:
+            headers = {"x-forwarded-for": "127.0.0.1"}
+            patch = {"auth": {"trusted_ips": ["127.0.0.1", "10.0.0.66"]}}
+            assert client.patch("/api/config", json=patch, headers=headers).status_code == 403
+            assert client.patch("/api/config", json={"dashboard": {"title": "Still fine"}}, headers=headers).status_code == 200
+
+            client.post("/api/auth/login", json={"password": "hunter2"}, headers=headers)
+            resp = client.patch("/api/config", json=patch, headers=headers)
+            assert resp.status_code == 200
+            assert resp.json()["auth"]["trusted_ips"] == ["127.0.0.1", "10.0.0.66"]
+
+
+def test_trusted_ips_are_editable_without_a_password(monkeypatch):
+    # No password means trusted IPs have no effect yet -- nothing to protect.
+    with tempfile.TemporaryDirectory() as tmp:
+        client = _make_client(monkeypatch, tmp)
+        with client:
+            assert client.patch("/api/config", json={"auth": {"trusted_ips": ["10.0.0.0/24"]}}).status_code == 200

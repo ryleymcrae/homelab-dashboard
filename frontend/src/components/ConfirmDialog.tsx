@@ -23,7 +23,7 @@ interface ConfirmDialogProps {
 export function ConfirmDialog({ action, targetName, busy, onCancel, onConfirm }: ConfirmDialogProps) {
   const [typed, setTyped] = useState("");
   const confirmClass =
-    action.kind === "stop" ? "btn--danger" : action.kind === "start" ? "btn--success" : "btn--primary";
+    action.kind === "stop" || action.kind === "remove" ? "btn--danger" : action.kind === "start" ? "btn--success" : "btn--primary";
   const requiredText = action.requireTypedConfirmation;
   const typedConfirmationOk = !requiredText || typed === requiredText;
 

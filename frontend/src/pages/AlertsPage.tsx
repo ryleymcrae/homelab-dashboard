@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api/client";
-import { formatTimestamp } from "../api/format";
+import { formatTemperature, formatTimestamp } from "../api/format";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useActionDetails } from "../hooks/useActionDetails";
 import { useAuth } from "../hooks/AuthContext";
@@ -19,6 +19,14 @@ function severityColor(severity: AlertSeverity): string {
   if (severity === "critical") return "var(--color-danger)";
   if (severity === "warning") return "var(--color-warning)";
   return "var(--color-primary)";
+}
+
+/** The backend writes alert messages in Celsius (its canonical unit); a
+ * temperature alert is re-rendered from its numeric value/threshold so it
+ * follows the °C/°F setting like every other temperature. */
+function alertMessage(alert: Alert): string {
+  if (alert.metric !== "temp_c" || alert.value == null || alert.threshold == null) return alert.message;
+  return `${alert.targetName} temperature at ${formatTemperature(Math.round(alert.value))} (threshold ${formatTemperature(alert.threshold)}).`;
 }
 
 function isSnoozed(alert: Alert): boolean {
@@ -54,7 +62,7 @@ function AlertCard({ alert, onChanged }: { alert: Alert; onChanged: () => void }
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
         <div>
           <div style={{ fontWeight: 700 }}>{alert.title}</div>
-          <div style={{ fontSize: "var(--text-sm)", color: "var(--color-text-muted)", marginTop: 2 }}>{alert.message}</div>
+          <div style={{ fontSize: "var(--text-sm)", color: "var(--color-text-muted)", marginTop: 2 }}>{alertMessage(alert)}</div>
           <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-faint)", marginTop: 6 }}>
             {formatTimestamp(alert.triggeredAt)} · {alert.targetName}
           </div>

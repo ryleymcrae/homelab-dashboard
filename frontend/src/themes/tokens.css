@@ -114,7 +114,7 @@
 
 /*
   Density is additive on top of the token set above, not a restructuring
-  of it: components only ever reference --space-*/--text-base, so
+  of it: components only ever reference the --space-N and --text-base tokens, so
   scaling those two custom properties up is enough to loosen the whole
   UI for "comfortable" without touching a single component. "compact"
   (the default, and the only density this app had before) needs no

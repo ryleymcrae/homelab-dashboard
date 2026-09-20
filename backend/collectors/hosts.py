@@ -20,15 +20,17 @@ import asyncio
 
 import httpx
 
-from backend.adapters.base import describe_exception
+from backend.adapters import docker_adapter
+from backend.adapters.base import describe_exception, short_reason
+from backend.adapters.docker_adapter import DockerEndpoint
 from backend.collectors import network as net_collector
 from backend.collectors import system as sys_collector
-from backend.config.schema import HostConfig
+from backend.config.schema import AppConfig, HostConfig, IntegrationConfig
 from backend.models.core import FailureDetail, HostInfo, Metric, MetricType, Status
 
 
 def host_id(cfg: HostConfig) -> str:
-    return cfg.name.lower().replace(" ", "-")
+    return cfg.id
 
 
 async def _agent_metrics(hid: str, cfg: HostConfig) -> HostInfo:
@@ -76,6 +78,41 @@ async def _agent_metrics(hid: str, cfg: HostConfig) -> HostInfo:
         )
 
 
+async def _docker_api_host(hid: str, cfg: HostConfig, conn: IntegrationConfig) -> HostInfo:
+    """No agent, but a Docker API assigned (Settings > Devices): up/down is
+    whether that API answers, and `docker info` supplies what Docker
+    knows about the machine -- CPU count, memory size, OS. Usage figures
+    (CPU%, memory used, disk, temperature) stay None: Docker doesn't
+    report them for the host, and they're never fabricated."""
+    try:
+        info = await asyncio.to_thread(docker_adapter.host_info, DockerEndpoint.from_connection(conn))
+    except Exception as exc:  # noqa: BLE001 - docker SDK errors vary; failure is data here
+        return HostInfo(
+            id=hid,
+            name=cfg.name,
+            address=cfg.address,
+            status=Status.OFFLINE,
+            model=cfg.model,
+            icon=cfg.icon,
+            is_local=False,
+            failure=FailureDetail(
+                reason="docker_api_unreachable",
+                message=f"Could not reach Docker API '{conn.name}' at {conn.docker_url}: {short_reason(exc)}",
+            ),
+        )
+    return HostInfo(
+        id=hid,
+        name=cfg.name,
+        address=cfg.address,
+        status=Status.ONLINE,
+        model=cfg.model or info.get("OperatingSystem"),
+        icon=cfg.icon,
+        cpu_cores=info.get("NCPU"),
+        mem_total_bytes=info.get("MemTotal"),
+        is_local=False,
+    )
+
+
 async def _reachability_only(hid: str, cfg: HostConfig) -> HostInfo:
     """No agent configured: report up/down from a ping reachability
     probe only -- not a fixed-port TCP connect, since a host may not run
@@ -113,22 +150,44 @@ async def _reachability_only(hid: str, cfg: HostConfig) -> HostInfo:
     )
 
 
-async def get_host_metrics(cfg: HostConfig) -> HostInfo:
+async def get_host_metrics(cfg: HostConfig, docker_conn: IntegrationConfig | None = None) -> HostInfo:
+    """Local psutil and a remote agent both measure more than Docker can,
+    so they stay the source of a host's vitals even with a Docker API
+    assigned -- that connection then only serves the host's containers
+    (backend/adapters/factory.py) and Docker details (get_host_detail).
+    Without either, the Docker API beats a bare ping."""
     hid = host_id(cfg)
     if cfg.is_local:
         return sys_collector.get_local_host_metrics(hid, cfg.name, cfg.model, cfg.icon)
     if cfg.agent_url:
         return await _agent_metrics(hid, cfg)
+    if docker_conn is not None:
+        return await _docker_api_host(hid, cfg, docker_conn)
     return await _reachability_only(hid, cfg)
 
 
-async def build_all_hosts(hosts: list[HostConfig]) -> list[HostInfo]:
-    if not hosts:
+async def build_all_hosts(config: AppConfig) -> list[HostInfo]:
+    if not config.hosts:
         return []
-    return list(await asyncio.gather(*(get_host_metrics(h) for h in hosts)))
+    return list(await asyncio.gather(*(get_host_metrics(h, config.docker_connection_for(h.name)) for h in config.hosts)))
 
 
-async def get_host_detail(cfg: HostConfig) -> list[Metric]:
+async def _docker_detail(conn: IntegrationConfig) -> list[Metric]:
+    try:
+        info = await asyncio.to_thread(docker_adapter.host_info, DockerEndpoint.from_connection(conn))
+    except Exception as exc:  # noqa: BLE001
+        return [Metric(key="docker_unreachable", label=f"Docker API ({conn.name})", value=f"Unreachable: {short_reason(exc)}", type=MetricType.TEXT)]
+    return docker_adapter.info_metrics(info)
+
+
+async def get_host_detail(cfg: HostConfig, docker_conn: IntegrationConfig | None = None) -> list[Metric]:
+    """Everything below, plus the Docker details when a Docker API is
+    assigned to the host."""
+    base = await _base_host_detail(cfg)
+    return base + (await _docker_detail(docker_conn) if docker_conn is not None else [])
+
+
+async def _base_host_detail(cfg: HostConfig) -> list[Metric]:
     """Deeper metrics for one host, fetched on demand (not part of the 2s
     broadcast snapshot -- see backend/collectors/system.py). Mirrors the
     three-tier strategy build_all_hosts uses for the cheap snapshot:

@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 import random
 import time
+import zlib
 
 from backend.models.core import (
     Action,
@@ -416,11 +417,26 @@ def demo_history(series: str, since_seconds: int) -> list[tuple[int, float]]:
     points: list[tuple[int, float]] = []
     delta = -since_seconds
     while delta <= 0:
-        value = _wave_at(now_since_start + delta, period_s, amplitude, offset)
+        value = _history_value(series, now_since_start + delta, step, period_s, amplitude, offset)
         value = _with_spikes(value, lo, hi, spike_chance=0.03)
         points.append((int(now + delta), value))
         delta += step
     return points
+
+
+def _history_value(series: str, t: float, step: float, period_s: float, amplitude: float, offset: float) -> float:
+    """The live wave's period is a few minutes. Sampled once per `step`
+    over hours or days, a pure sine aliases into a repeating 2-3 value
+    sawtooth that reads as noise on every chart. Only draw the wave where
+    a step is fine enough to trace it; otherwise show what averaged real
+    samples look like -- a slow daily rhythm plus per-sample variation,
+    seeded per (series, sample) so a chart doesn't reshuffle on every
+    fetch."""
+    if step * 4 <= period_s:
+        return _wave_at(t, period_s, amplitude, offset)
+    rng = random.Random(zlib.crc32(f"{series}:{int(t // step)}".encode()))
+    daily = 0.6 * amplitude * math.sin(t / 86400 * 2 * math.pi)
+    return offset + daily + rng.gauss(0, amplitude * 0.3)
 
 
 def demo_fleet_summary(services: list[Service] | None = None) -> FleetSummary:

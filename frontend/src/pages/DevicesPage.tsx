@@ -1,13 +1,19 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useSnapshot } from "../hooks/SnapshotContext";
 import { api } from "../api/client";
-import { Sparkline } from "../charts/Sparkline";
 import { TimeSeriesChart } from "../charts/TimeSeriesChart";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { FleetOverview } from "../components/FleetOverview";
-import { formatBytes, formatMetricValue, formatTimestamp } from "../api/format";
+import { HostActionsMenu } from "../components/HostActionsMenu";
+import { HostMetricTiles } from "../components/HostMetricTile";
+import { resolveMetricDisplay } from "../api/metrics";
+import { useChartGrid } from "../hooks/useChartGrid";
+import { bytesAxisFormatter, formatBytes, formatMetricValue, formatTimestamp } from "../api/format";
 import { useAuth } from "../hooks/AuthContext";
 import type { BackupStatus, HostAction, HostInfo, Metric, ScheduledJob } from "../api/types";
+
+const percentLabel = (v: number) => `${Math.round(v)}%`;
 
 const RANGE_OPTIONS: { label: string; hours: number }[] = [
   { label: "1H", hours: 1 },
@@ -37,6 +43,54 @@ function RangeSelector({ hours, onChange }: { hours: number; onChange: (hours: n
         </button>
       ))}
     </div>
+  );
+}
+
+/**
+ * The one show/hide pattern every collapsible sub-section of a host's
+ * card uses -- a clickable title + "Show ▼ / Hide ▲" indicator, an
+ * optional bit of header-right content (a range selector, a "Run Now"
+ * button) that doesn't itself trigger the toggle, and lazy children:
+ * mounted (so they fetch) only once actually opened. Reused instead of
+ * hand-rolling this per section so every section behaves identically.
+ */
+/** `open`/`onToggle` make it controlled -- a tapped metric tile opens
+ * Detailed Metrics from outside. */
+function CollapsibleSection({
+  title,
+  defaultOpen = false,
+  open: controlledOpen,
+  onToggle,
+  extra,
+  children,
+}: {
+  title: string;
+  defaultOpen?: boolean;
+  open?: boolean;
+  onToggle?: (open: boolean) => void;
+  extra?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
+  const open = controlledOpen ?? uncontrolledOpen;
+  const toggle = () => (onToggle ? onToggle(!open) : setUncontrolledOpen(!open));
+  return (
+    <>
+      <hr className="card-divider" />
+      {/* The toggle is its own button, beside `extra` rather than around
+          it: a button can't contain other controls (like the range
+          selector) without swallowing their labels and taps. */}
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+        <button type="button" className="collapsible__toggle" aria-expanded={open} onClick={toggle}>
+          <span className="section-title" style={{ marginBottom: 0, flex: 1 }}>
+            {title}
+          </span>
+          <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", flexShrink: 0 }}>{open ? "Hide ▲" : "Show ▼"}</span>
+        </button>
+        {extra}
+      </div>
+      {open && <div style={{ marginTop: "var(--space-3)" }}>{children}</div>}
+    </>
   );
 }
 
@@ -158,27 +212,6 @@ function HostActionResultBanner({ result, onDismiss }: { result: NonNullable<Hos
   );
 }
 
-function HostActionsRow({ host, onTrigger }: { host: HostInfo; onTrigger: (action: HostAction) => void }) {
-  const { canAct } = useAuth();
-  if (!canAct || host.actions.length === 0) return null;
-  return (
-    <div className="card">
-      <div className="section-title">HOST ACTIONS</div>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {host.actions.map((action) => (
-          <button
-            key={action.kind}
-            className={`btn ${action.destructive ? "btn--danger" : "btn--primary"}`}
-            onClick={() => onTrigger(action)}
-          >
-            {action.label}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 // Cron/scheduled-job viewer -- fetched on expand, like Detailed Metrics.
 // "Run Now" goes through the exact same confirm-then-execute path as a
 // direct host action, via `onRunNow` (backend/api/main.py:run_host_job
@@ -296,17 +329,17 @@ function BackupStatusPanel({ host, onRunBackup }: { host: HostInfo; onRunBackup:
   const backupAction = canAct ? host.actions.find((a) => a.kind === "run_backup") : undefined;
 
   return (
-    <div className="card">
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-        <div className="section-title" style={{ marginBottom: 0 }}>
-          BACKUP STATUS
-        </div>
-        {backupAction && (
+    <CollapsibleSection
+      title="BACKUP STATUS"
+      defaultOpen
+      extra={
+        backupAction && (
           <button className="btn btn--ghost" onClick={() => onRunBackup(backupAction)}>
             Run Backup Now
           </button>
-        )}
-      </div>
+        )
+      }
+    >
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", rowGap: 8, columnGap: 16, fontSize: "var(--text-sm)" }}>
         <div style={{ color: "var(--color-text-muted)" }}>Last successful backup</div>
         <div style={{ textAlign: "right", fontWeight: 600 }}>{formatTimestamp(status.lastBackupAt)}</div>
@@ -318,46 +351,61 @@ function BackupStatusPanel({ host, onRunBackup }: { host: HostInfo; onRunBackup:
           {formatTimestamp(status.lastAttemptAt)}
         </div>
       </div>
-    </div>
-  );
-}
-
-function MetricCard({
-  label,
-  value,
-  sub,
-  values,
-  color,
-}: {
-  label: string;
-  value: string;
-  sub: string;
-  values: number[];
-  color: string;
-}) {
-  return (
-    <div className="card">
-      <div className="section-title">{label}</div>
-      <div style={{ fontSize: "var(--text-xl)", fontWeight: 700 }}>{value}</div>
-      <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", marginBottom: 6 }}>{sub}</div>
-      <Sparkline values={values} color={color} />
-    </div>
+    </CollapsibleSection>
   );
 }
 
 // Every host, local or remote, gets the same set of metric cards and the
 // same CPU/memory history chart -- keyed off its own history series
 // (`host.<id>.cpu` / `host.<id>.mem`), not a single hardcoded series.
-function HostSystemSection({ host }: { host: HostInfo }) {
+function HostDeviceSection({ host, focused }: { host: HostInfo; focused: boolean }) {
+  const { canAct } = useAuth();
+  const [collapsed, setCollapsed] = useState(false);
   const [cpuHistory, setCpuHistory] = useState<{ ts: number; value: number }[]>([]);
   const [memHistory, setMemHistory] = useState<{ ts: number; value: number }[]>([]);
-  const [showDetail, setShowDetail] = useState(false);
-  const [showJobs, setShowJobs] = useState(false);
   const [rangeHours, setRangeHours] = useState(6);
   const [pendingHostAction, setPendingHostAction] = useState<HostAction | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [dismissedResultAt, setDismissedResultAt] = useState<string | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [scrollRequest, setScrollRequest] = useState(0);
+  const detailRef = useRef<HTMLDivElement>(null);
+  const { snapshot } = useSnapshot();
+  const [chartGrid, setChartGrid] = useChartGrid();
+  // Same colors as the CPU/Memory tiles (Settings > Appearance > Metric display).
+  const cpuColor = resolveMetricDisplay(snapshot?.dashboard.metricDisplay, "cpu").color;
+  const memColor = resolveMetricDisplay(snapshot?.dashboard.metricDisplay, "mem").color;
+  // History stores memory as a percentage; with the host's total known,
+  // the right axis shows it in bytes -- a second 0-100% axis would just
+  // repeat the left one.
+  const memTotal = host.memTotalBytes ?? null;
+  const chartSeries = useMemo(
+    () => [
+      { name: "CPU", color: cpuColor, points: cpuHistory },
+      {
+        name: "Memory",
+        color: memColor,
+        axis: "right" as const,
+        points: memTotal ? memHistory.map((p) => ({ ts: p.ts, value: (p.value / 100) * memTotal })) : memHistory,
+      },
+    ],
+    [cpuHistory, memHistory, memTotal, cpuColor, memColor]
+  );
+
+  // Drill-in from a metric tile (here, or on Home via ?host=): expand the
+  // panel, open Detailed Metrics, and bring it into view once rendered.
+  const openDetail = () => {
+    setCollapsed(false);
+    setDetailOpen(true);
+    setScrollRequest((n) => n + 1);
+  };
+  useEffect(() => {
+    if (focused) openDetail();
+  }, [focused]);
+  useEffect(() => {
+    if (scrollRequest) detailRef.current?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+  }, [scrollRequest]);
 
   const runHostAction = async (action: HostAction) => {
     setActionBusy(true);
@@ -405,8 +453,6 @@ function HostSystemSection({ host }: { host: HostInfo }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-      <div className="section-title">{host.name.toUpperCase()}</div>
-
       {host.lastActionResult && host.lastActionResult.timestamp !== dismissedResultAt && (
         <HostActionResultBanner
           result={host.lastActionResult}
@@ -414,92 +460,53 @@ function HostSystemSection({ host }: { host: HostInfo }) {
         />
       )}
 
-      <div className="grid grid-4">
-        <MetricCard
-          label="CPU"
-          value={`${host.cpuPercent ?? "—"}%`}
-          sub={`${host.cpuCores ?? "—"} cores @ ${host.cpuFreqMhz ? (host.cpuFreqMhz / 1000).toFixed(1) : "—"} GHz`}
-          values={cpuHistory.map((p) => p.value)}
-          color="var(--chart-line-1)"
-        />
-        <MetricCard
-          label="MEMORY"
-          value={`${host.memPercent ?? "—"}%`}
-          sub={`${formatBytes(host.memUsedBytes)} / ${formatBytes(host.memTotalBytes)}`}
-          values={memHistory.map((p) => p.value)}
-          color="var(--chart-line-2)"
-        />
-        <MetricCard
-          label="STORAGE"
-          value={`${host.diskPercent ?? "—"}%`}
-          sub={`${formatBytes(host.diskUsedBytes)} / ${formatBytes(host.diskTotalBytes)}`}
-          values={[]}
-          color="var(--color-primary)"
-        />
-        <MetricCard
-          label="TEMPERATURE"
-          value={host.temperatureC != null ? `${host.temperatureC}°C` : "N/A"}
-          sub={host.temperatureC == null ? "Sensor unavailable" : host.temperatureC > 70 ? "High" : "Normal"}
-          values={[]}
-          color="var(--color-warning)"
-        />
-      </div>
-
       <div className="card">
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-          <div className="section-title" style={{ marginBottom: 0 }}>
-            CPU & MEMORY USAGE
+        <div style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }} onClick={() => setCollapsed((v) => !v)}>
+          <div className="section-title" style={{ marginBottom: 0, flex: 1 }}>
+            {host.name.toUpperCase()}
           </div>
-          <RangeSelector hours={rangeHours} onChange={setRangeHours} />
-        </div>
-        <TimeSeriesChart
-          series={[
-            { name: "CPU", color: "var(--chart-line-1)", points: cpuHistory },
-            { name: "Memory", color: "var(--chart-line-2)", points: memHistory },
-          ]}
-        />
-      </div>
-
-      <div className="card">
-        <div
-          style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}
-          onClick={() => setShowDetail((v) => !v)}
-        >
-          <div className="section-title" style={{ marginBottom: 0 }}>
-            DETAILED METRICS
-          </div>
-          <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>{showDetail ? "Hide ▲" : "Show ▼"}</span>
-        </div>
-        {showDetail && (
-          <div style={{ marginTop: "var(--space-3)" }}>
-            <HostDetailPanel hostId={host.id} />
-          </div>
-        )}
-      </div>
-
-      <HostActionsRow host={host} onTrigger={setPendingHostAction} />
-      {actionError && <div style={{ fontSize: "var(--text-sm)", color: "var(--color-danger)" }}>{actionError}</div>}
-
-      <BackupStatusPanel host={host} onRunBackup={setPendingHostAction} />
-
-      {host.actions.length > 0 && (
-        <div className="card">
-          <div
-            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}
-            onClick={() => setShowJobs((v) => !v)}
-          >
-            <div className="section-title" style={{ marginBottom: 0 }}>
-              SCHEDULED JOBS
-            </div>
-            <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>{showJobs ? "Hide ▲" : "Show ▼"}</span>
-          </div>
-          {showJobs && (
-            <div style={{ marginTop: "var(--space-3)" }}>
-              <ScheduledJobsPanel hostId={host.id} />
+          {canAct && (
+            <div onClick={(e) => e.stopPropagation()}>
+              <HostActionsMenu actions={host.actions} onSelect={setPendingHostAction} />
             </div>
           )}
+          <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", flexShrink: 0 }}>{collapsed ? "Show ▼" : "Hide ▲"}</span>
         </div>
-      )}
+
+        <div style={{ marginTop: "var(--space-3)" }}>
+          <HostMetricTiles host={host} history={{ cpu: cpuHistory.map((p) => p.value), mem: memHistory.map((p) => p.value) }} onSelect={openDetail} />
+        </div>
+
+        {actionError && <div style={{ fontSize: "var(--text-sm)", color: "var(--color-danger)", marginTop: 8 }}>{actionError}</div>}
+
+        {!collapsed && (
+          <>
+            <CollapsibleSection title="CPU & MEMORY USAGE" defaultOpen extra={<RangeSelector hours={rangeHours} onChange={setRangeHours} />}>
+              <TimeSeriesChart
+                grid={chartGrid}
+                onGridChange={setChartGrid}
+                left={{ max: 100, format: percentLabel, color: cpuColor }}
+                right={memTotal ? { max: memTotal, format: bytesAxisFormatter(memTotal), color: memColor } : { max: 100, format: percentLabel, color: memColor }}
+                series={chartSeries}
+              />
+            </CollapsibleSection>
+
+            <div ref={detailRef} style={{ scrollMarginTop: "var(--space-3)" }}>
+              <CollapsibleSection title="DETAILED METRICS" open={detailOpen} onToggle={setDetailOpen}>
+                <HostDetailPanel hostId={host.id} />
+              </CollapsibleSection>
+            </div>
+
+            <BackupStatusPanel host={host} onRunBackup={setPendingHostAction} />
+
+            {host.actions.length > 0 && (
+              <CollapsibleSection title="SCHEDULED JOBS">
+                <ScheduledJobsPanel hostId={host.id} />
+              </CollapsibleSection>
+            )}
+          </>
+        )}
+      </div>
 
       {pendingHostAction && (
         <ConfirmDialog
@@ -514,15 +521,17 @@ function HostSystemSection({ host }: { host: HostInfo }) {
   );
 }
 
-export function SystemPage() {
+export function DevicesPage() {
   const { snapshot } = useSnapshot();
+  const [params] = useSearchParams();
+  const focusedHost = params.get("host");
   if (!snapshot) return <div className="page">Loading…</div>;
 
   return (
     <div className="page">
       <FleetOverview />
       {snapshot.hosts.map((host) => (
-        <HostSystemSection key={host.id} host={host} />
+        <HostDeviceSection key={host.id} host={host} focused={host.id === focusedHost} />
       ))}
     </div>
   );

@@ -17,8 +17,11 @@ export DASHBOARD_CONFIG=$(pwd)/config.yml
 # systemd deploy paths provision for you but a plain local user can't
 # write to -- point it somewhere writable for a dev run:
 export DASHBOARD_HISTORY_DB=$(pwd)/data/history.sqlite3
-# Same deal for the audit log (backend/persistence/audit.py):
+# Same deal for the audit log (backend/persistence/audit.py), alerts,
+# and uploaded images (backend/persistence/assets.py):
 export DASHBOARD_AUDIT_DB=$(pwd)/data/audit.sqlite3
+export DASHBOARD_ALERTS_DB=$(pwd)/data/alerts.sqlite3
+export DASHBOARD_ASSETS_DIR=$(pwd)/data/assets
 uvicorn backend.api.main:app --reload --port 8080
 ```
 

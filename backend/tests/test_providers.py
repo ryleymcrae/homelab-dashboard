@@ -53,6 +53,43 @@ def test_live_provider_fleet_summary_with_no_hosts_or_services(monkeypatch):
         assert summary.total_power_draw_w is None  # never fabricated -- no real sensor exists yet
 
 
+@pytest.mark.asyncio
+async def test_live_provider_overlays_configured_host_onto_services():
+    """No adapter (Docker/systemd/HTTP/TCP/Prometheus) sets Service.host
+    itself -- it only knows about the thing it's monitoring, not which
+    `hosts:` entry it runs on. LiveProvider overlays it centrally from
+    ServiceConfig.host so "which host is this service on" works the same
+    way in live mode as it already does in DemoProvider's hand-written
+    fixtures (backend/demo/generator.py)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config_path = Path(tmp) / "config.yml"
+        config_path.write_text(
+            yaml.safe_dump(
+                {
+                    "hosts": [{"name": "ziri-mini", "is_local": True}],
+                    "services": [
+                        {
+                            "name": "Unreachable",
+                            "type": "http",
+                            "url": "http://127.0.0.1:1/",
+                            "host": "ziri-mini",
+                            "health_check": {"timeout_seconds": 1},
+                        }
+                    ],
+                }
+            )
+        )
+        store = ConfigStore(config_path)
+        history = HistoryStore(Path(tmp) / "history.sqlite3")
+        live = LiveProvider(store, history)
+
+        services = await live.get_services()
+        assert services[0].host == "ziri-mini"
+
+        single = await live.get_service(services[0].id)
+        assert single.host == "ziri-mini"
+
+
 def test_live_provider_history_delegates_to_the_real_history_store():
     with tempfile.TemporaryDirectory() as tmp:
         config_path = Path(tmp) / "config.yml"
@@ -360,3 +397,17 @@ async def test_get_fleet_summary_aggregates_across_hosts(provider):
     assert summary.total_cores == sum(h.cpu_cores or 0 for h in hosts)
     assert summary.containers_total >= 1  # plex, at least
     assert summary.containers_running <= summary.containers_total
+
+
+def test_demo_history_backfill_is_not_an_aliased_repeating_pattern(monkeypatch):
+    # Sampling a minutes-long sine every few minutes used to produce a
+    # 3-value cycle (17.3, 39.4, 9.3, 17.3, ...) that charted as noise.
+    from backend.demo import generator
+
+    monkeypatch.setattr(generator.random, "random", lambda: 1.0)  # no spikes, so values are comparable
+    monkeypatch.setattr(generator.time, "time", lambda: generator._start + 30 * 86400)  # a fixed "now"
+    six_hours = [v for _, v in generator.demo_history("host.ziri-mini.cpu", 6 * 3600)]
+    assert len(set(six_hours)) > 60
+    assert six_hours[:3] != six_hours[3:6]
+    # Stable across fetches, so switching chart ranges back and forth doesn't reshuffle it.
+    assert [v for _, v in generator.demo_history("host.ziri-mini.cpu", 6 * 3600)][:50] == six_hours[:50]

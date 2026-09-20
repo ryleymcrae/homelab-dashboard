@@ -43,7 +43,10 @@ This installs the backend as a systemd service under
 `/etc/homelab-dashboard/config.yml`. Build the frontend separately
 (`cd frontend && npm install && npm run build`) and serve `frontend/dist`
 with any web server — `deploy/nginx.conf` is a ready-made reverse-proxy
-config that also forwards `/api` and `/ws` to the backend.
+config that also forwards `/api` and `/ws` to the backend. If you use
+your own nginx config instead, give `/api/` a `client_max_body_size` of
+at least `3m`: nginx's 1 MB default refuses image uploads (Settings →
+Branding) before they reach the backend.
 
 The install script also adds the service account to the `systemd-journal`
 and (if present) `docker` groups, since without them `type: systemd` log
@@ -99,8 +102,9 @@ one command away from undone:
 ./deploy/systemd/deploy.sh rollback 20260101-120000   # a specific one
 ```
 
-`/etc/homelab-dashboard/config.yml` and `/data` are never touched by
-either the deploy or the rollback.
+`/etc/homelab-dashboard/config.yml` and `/data` — including uploaded
+images in `/data/assets` — are never touched by either the deploy or the
+rollback.
 
 ## Uninstalling
 

@@ -10,6 +10,7 @@ endpoint, or a game server identically.
 """
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 
 from backend.models.core import Action, LogLine, Service
@@ -27,6 +28,21 @@ def describe_exception(exc: BaseException) -> str:
     if text:
         return text
     return type(exc).__name__
+
+
+_ERRNO_REASON = re.compile(r"\[Errno -?\d+\] ([^'\"()\]]+)")
+
+
+def short_reason(exc: BaseException) -> str:
+    """describe_exception minus library wrapping: the Docker SDK and
+    requests bury the actual cause ("Connection refused", "Name or
+    service not known") under several layers of repr, and paramiko
+    prefixes "[Errno None]"."""
+    text = describe_exception(exc)
+    match = _ERRNO_REASON.search(text)
+    if match:
+        return match.group(1).strip()
+    return text.removeprefix("[Errno None] ")[:300]
 
 
 class AdapterError(Exception):

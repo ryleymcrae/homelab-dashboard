@@ -8,25 +8,28 @@ Pushover, generic webhook), selected by `NotifierConfig.type`
 place that maps a type string to a class, same role as
 backend/adapters/factory.py.
 
-None of the concrete notifiers actually call out to a real service yet
-(see each module's docstring) -- they simulate a delay and a plausible
-outcome, same "mock now, real later" split as every other admin-action
-capability in this app. Building the real HTTP call for a given service
-later is a change to that one class alone; nothing about the interface,
-the alert evaluator, or the API routes needs to change.
+Every notifier makes a real HTTP request. Secrets (webhook URLs, API
+tokens) come from the environment variables config.yml names
+(docs/security.md), are read at send time, and never appear in a
+result message or log line -- a Discord webhook URL *is* its credential.
 """
 from __future__ import annotations
 
-import asyncio
 import os
-import random
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+import httpx
+
+from backend.adapters.base import describe_exception
 from backend.config.schema import NotifierConfig
 
-# Tests set this to 0, same pattern as backend/demo/runtime.py:ACTION_DELAY_SCALE.
-SEND_DELAY_SCALE = 1.0
+TIMEOUT_SECONDS = 10.0
+# Tests swap in an httpx.MockTransport; None means real network.
+HTTP_TRANSPORT: httpx.AsyncBaseTransport | None = None
+
+# Discord caps a message at 2000 characters.
+_DISCORD_MAX = 2000
 
 
 @dataclass
@@ -42,82 +45,113 @@ class Notifier(ABC):
     @abstractmethod
     async def send(self, title: str, body: str) -> NotifyResult:
         """Send one notification. Never raises for a routine failure
-        (missing/misconfigured credentials, simulated or real network
-        error) -- returns NotifyResult(success=False, ...) instead, the
-        same "represent failure as data, not an exception" rule
+        (missing/misconfigured credentials, a network error, the service
+        refusing it) -- returns NotifyResult(success=False, ...) instead,
+        the same "represent failure as data, not an exception" rule
         ServiceAdapter.get_status() follows."""
 
 
-async def _simulate_send(delay_seconds: float, failure_chance: float, success_detail: str, failure_detail: str) -> NotifyResult:
-    delay = delay_seconds * SEND_DELAY_SCALE * random.uniform(0.7, 1.3)
-    if delay > 0:
-        await asyncio.sleep(delay)
-    if random.random() < failure_chance:
-        return NotifyResult(success=False, message=failure_detail)
-    return NotifyResult(success=True, message=success_detail)
+def _secret(env_name: str | None, what: str) -> tuple[str | None, NotifyResult | None]:
+    if not env_name:
+        return None, NotifyResult(False, f"No environment variable set for the {what}.")
+    value = os.environ.get(env_name, "").strip()
+    if not value:
+        return None, NotifyResult(False, f"Environment variable '{env_name}' is not set.")
+    return value, None
+
+
+def _http_url(url: str, env_name: str | None) -> NotifyResult | None:
+    if not url.startswith(("https://", "http://")):
+        return NotifyResult(False, f"'{env_name}' doesn't hold an http(s) URL.")
+    return None
+
+
+async def _post(service: str, url: str, **kwargs) -> tuple[httpx.Response | None, NotifyResult | None]:
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS, transport=HTTP_TRANSPORT) as client:
+            return await client.post(url, **kwargs), None
+    except httpx.HTTPError as exc:
+        # Some httpx errors quote the URL -- for a webhook, the secret itself.
+        return None, NotifyResult(False, f"Could not reach {service}: {describe_exception(exc).replace(url, '[webhook URL]')}")
+
+
+def _refused(service: str, resp: httpx.Response) -> NotifyResult:
+    if resp.status_code == 429:
+        retry = resp.headers.get("retry-after")
+        return NotifyResult(False, f"{service} is rate-limiting this sender" + (f" -- retry in {retry}s." if retry else "."))
+    if resp.status_code in (401, 403, 404):
+        return NotifyResult(False, f"{service} refused it ({resp.status_code}) -- check the URL/credentials in the environment variable.")
+    return NotifyResult(False, f"{service} returned {resp.status_code}.")
 
 
 class DiscordNotifier(Notifier):
-    """Real implementation would POST {"content": f"**{title}**\\n{body}"}
-    to the webhook URL named by `config.url_env`. Simulated for now."""
+    """POSTs to the Discord webhook URL in `config.url_env`. Mentions are
+    disabled, so a host or service named "@everyone" can't ping the whole
+    server through an alert."""
 
     async def send(self, title: str, body: str) -> NotifyResult:
-        if self.config.url_env and not os.environ.get(self.config.url_env):
-            return NotifyResult(False, f"Environment variable '{self.config.url_env}' is not set.")
-        return await _simulate_send(
-            0.6, 0.05,
-            f"(simulated) Discord webhook would post: \"{title}: {body}\"",
-            "(simulated) Discord webhook post failed.",
-        )
+        url, problem = _secret(self.config.url_env, "Discord webhook URL")
+        if problem or (problem := _http_url(url, self.config.url_env)):
+            return problem
+        content = f"**{title}**\n{body}"
+        if len(content) > _DISCORD_MAX:
+            content = content[: _DISCORD_MAX - 1] + "…"
+        resp, problem = await _post("Discord", url, json={"content": content, "allowed_mentions": {"parse": []}})
+        if problem:
+            return problem
+        if resp.is_success:
+            return NotifyResult(True, "Posted to Discord.")
+        return _refused("Discord", resp)
 
 
 class NtfyNotifier(Notifier):
-    """Real implementation would POST `body` as plaintext to
-    f"{config.ntfy_server}/{config.ntfy_topic}" with a Title header.
-    Simulated for now."""
+    """Publishes as JSON to the ntfy server's root (not the plaintext
+    per-topic form): JSON carries a title with any characters, where an
+    HTTP header can't."""
 
     async def send(self, title: str, body: str) -> NotifyResult:
         if not self.config.ntfy_topic:
             return NotifyResult(False, "No ntfy topic configured.")
-        return await _simulate_send(
-            0.5, 0.05,
-            f"(simulated) ntfy would publish to {self.config.ntfy_server}/{self.config.ntfy_topic}: \"{title}: {body}\"",
-            "(simulated) ntfy publish failed.",
-        )
+        server = self.config.ntfy_server.rstrip("/")
+        resp, problem = await _post("ntfy", server, json={"topic": self.config.ntfy_topic, "title": title, "message": body})
+        if problem:
+            return problem
+        if resp.is_success:
+            return NotifyResult(True, f"Published to {server}/{self.config.ntfy_topic}.")
+        return _refused("ntfy", resp)
 
 
 class PushoverNotifier(Notifier):
-    """Real implementation would POST to api.pushover.net/1/messages.json
-    with the user key and API token named by `config.pushover_user_key_env`
-    / `config.pushover_api_token_env`. Simulated for now."""
-
     async def send(self, title: str, body: str) -> NotifyResult:
-        missing = [
-            env_name
-            for env_name in (self.config.pushover_user_key_env, self.config.pushover_api_token_env)
-            if env_name and not os.environ.get(env_name)
-        ]
-        if missing:
-            return NotifyResult(False, f"Environment variable(s) not set: {', '.join(missing)}.")
-        return await _simulate_send(
-            0.7, 0.05,
-            f"(simulated) Pushover would send: \"{title}: {body}\"",
-            "(simulated) Pushover send failed.",
+        user, problem = _secret(self.config.pushover_user_key_env, "Pushover user key")
+        if problem:
+            return problem
+        token, problem = _secret(self.config.pushover_api_token_env, "Pushover API token")
+        if problem:
+            return problem
+        resp, problem = await _post(
+            "Pushover", "https://api.pushover.net/1/messages.json", data={"token": token, "user": user, "title": title, "message": body}
         )
+        if problem:
+            return problem
+        if resp.is_success:
+            return NotifyResult(True, "Sent via Pushover.")
+        return _refused("Pushover", resp)
 
 
 class WebhookNotifier(Notifier):
-    """Real implementation would POST a JSON body ({"title": ..., "body":
-    ...}) to the URL named by `config.url_env`. Simulated for now."""
+    """POSTs {"title": ..., "body": ...} as JSON to the URL in `config.url_env`."""
 
     async def send(self, title: str, body: str) -> NotifyResult:
-        if self.config.url_env and not os.environ.get(self.config.url_env):
-            return NotifyResult(False, f"Environment variable '{self.config.url_env}' is not set.")
-        return await _simulate_send(
-            0.4, 0.05,
-            f"(simulated) Webhook would POST: \"{title}: {body}\"",
-            "(simulated) Webhook POST failed.",
-        )
+        url, problem = _secret(self.config.url_env, "webhook URL")
+        if problem or (problem := _http_url(url, self.config.url_env)):
+            return problem
+        resp, problem = await _post("The webhook", url, json={"title": title, "body": body})
+        if problem:
+            return problem
+        if resp.is_success:
+            return NotifyResult(True, f"Webhook accepted it ({resp.status_code}).")
+        return _refused("The webhook", resp)
 
 
 _NOTIFIER_CLASSES: dict[str, type[Notifier]] = {

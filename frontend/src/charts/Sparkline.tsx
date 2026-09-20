@@ -7,7 +7,7 @@ interface SparklineProps {
   color?: string;
 }
 
-/** Minimal inline sparkline for the System page's metric cards. Pure SVG,
+/** Minimal inline sparkline for the Devices page's metric cards. Pure SVG,
  * no charting library needed for something this small (keeps the JS
  * bundle light, per spec section 35). */
 export function Sparkline({ values, width = 120, height = 32, color = "var(--color-primary)" }: SparklineProps) {
